@@ -22,6 +22,12 @@ Método y referencias: `../../README.md` y `~/MD/xbox-to-vita-ports.md` (THUG y 
 - Title ID Vita: `PSOT00001` · datos: `ux0:data/pop-sot/` · log: `ux0:data/pop-sot/pop-sot.log`
 - Requisito en consola: `ur0:data/libshacccg.suprx` (ShaRKF00D), HENkaku/Enso, VitaShell.
 
+## Hallazgos clave (detalle y evidencia en `PORTING_PLAN.md` §0)
+
+- Disco Xbox **PAL** `US-029` v2, XDK 5558; motor **Jade**; vídeos Bink (`.int`), bigfile `prince.bf` (`BIG\0`).
+- **Sin base de código** usable: el plan es una decompilación clean-room del XBE (Ruta A) o recompilación estática + HLE (Ruta B, experimental).
+- No usar el código filtrado de Jade salvo decisión explícita del usuario.
+
 ## Reglas para el agente (IA)
 
 1. **Trabaja una fase a la vez** según `PORTING_PLAN.md`. Al cerrar un paso, marca su checkbox y anota
@@ -43,7 +49,7 @@ Método y referencias: `../../README.md` y `~/MD/xbox-to-vita-ports.md` (THUG y 
 export VITASDK=$HOME/vitasdk PATH=$HOME/vitasdk/bin:$PATH
 cmake -S port/vita -B build/vita && cmake --build build/vita     # -> build/vita/pop-sot.vpk
 VITA_IP=<ip> ../../tools/deploy.sh build/vita/eboot.bin PSOT00001  # iteración rápida (tras instalar el VPK)
-python3 -I ../../tools/xbe_info.py game_data/<xbe> --md            # cabecera del XBE
+python3 -I ../../tools/xbe_info.py game_data/default.xbe --md            # cabecera del XBE
 python3 -I ../../tools/inventory.py game_data                      # inventario de datos
-../../tools/media2mp4.sh game_data/<carpeta_videos> converted/movies  # vídeos -> MP4
+../../tools/media2mp4.sh game_data/VIDEO/30fps converted/movies  # vídeos -> MP4
 ```

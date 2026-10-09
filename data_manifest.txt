@@ -1,2 +1,7 @@
-# Archivos mínimos en ux0:data/pop-sot/ (rutas relativas, uno por línea)
+# Archivos mínimos en ux0:data/pop-sot/ (rutas relativas a la raíz de la XISO, uno por línea)
 default.xbe
+prince.bf
+shaders.bin
+MEDIA/pop4.uix
+SOUND/SOUNDX.big
+SOUND/SOUNDX.fat

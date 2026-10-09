@@ -56,7 +56,6 @@ int main(void) {
     glClear(GL_COLOR_BUFFER_BIT);
     vglSwapBuffers(GL_FALSE);
   }
-  vglEnd();
   if (g_log) fclose(g_log);
   sceKernelExitProcess(0);
   return 0;

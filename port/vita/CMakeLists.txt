@@ -2,6 +2,8 @@
 # En fases posteriores este mismo CMakeLists crece con port/vita/src (capa de plataforma)
 # y el código del juego (source/), nunca al revés.
 cmake_minimum_required(VERSION 3.16)
+# vita.cmake de VitaSDK declara cmake_minimum_required < 3.5, que CMake 4 rechaza
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "")
 
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
   if(DEFINED ENV{VITASDK})
@@ -20,7 +22,7 @@ set(VITA_VERSION  "00.01")
 set(DATA_DIR      "ux0:data/pop-sot")
 
 # data_manifest.txt (raíz del port) -> lista de archivos que el smoke exige en DATA_DIR
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../../data_manifest.txt" _manifest REGEX "^[^#]")
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../../data_manifest.txt" _manifest REGEX "^[^#]" ENCODING UTF-8)
 set(MANIFEST_ENTRIES "")
 foreach(f IN LISTS _manifest)
   string(STRIP "${f}" f)
@@ -33,8 +35,10 @@ target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}"
 target_compile_definitions(${PROJECT_NAME} PRIVATE DATA_DIR="${DATA_DIR}" APP_SLUG="${PROJECT_NAME}")
 target_compile_options(${PROJECT_NAME} PRIVATE -O2 -Wall)
 target_link_libraries(${PROJECT_NAME}
+  -Wl,--whole-archive pthread -Wl,--no-whole-archive
   vitaGL vitashark SceShaccCgExt taihen_stub SceShaccCg_stub mathneon m
-  SceAppMgr_stub SceCtrl_stub SceDisplay_stub SceGxm_stub SceKernelDmacMgr_stub SceIofilemgr_stub)
+  SceAppMgr_stub SceCtrl_stub SceDisplay_stub SceGxm_stub SceKernelDmacMgr_stub SceIofilemgr_stub SceCommonDialog_stub
+  stdc++)  # después de vitaGL: es C++ por dentro y el orden de enlace estático importa
 
 vita_create_self(eboot.bin ${PROJECT_NAME} UNSAFE)
 vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
