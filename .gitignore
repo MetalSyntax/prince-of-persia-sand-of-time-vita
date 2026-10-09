@@ -1,0 +1,38 @@
+# --- Anti-DMCA: nada del disco original ni derivado de él se commitea ---
+# Datos del juego (symlink a la XISO extraída y copias convertidas)
+/game_data
+/game_data/
+/converted/
+*.iso
+*.xbe
+*.xiso
+
+# Decompilación / exportaciones de Ghidra (derivado del XBE propietario, regenerable)
+/re/ghidra_project/
+/re/exports/
+*.gpr
+*.rep/
+
+# Build
+/build/
+/port/vita/build/
+CMakeCache.txt
+CMakeFiles/
+*.elf
+*.self
+*.velf
+eboot.bin
+*.vpk
+
+# Debug en consola
+/logs/
+*.psp2dmp
+*.log
+
+# Sistema / IDE
+.DS_Store
+._*
+__pycache__/
+*.pyc
+.vscode/
+.idea/

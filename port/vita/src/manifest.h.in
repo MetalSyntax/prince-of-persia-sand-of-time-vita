@@ -1,0 +1,4 @@
+/* Generado por CMake desde data_manifest.txt — no editar a mano. */
+static const char *const kRequired[] = {
+@MANIFEST_ENTRIES@  0
+};

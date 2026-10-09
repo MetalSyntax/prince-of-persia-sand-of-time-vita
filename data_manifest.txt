@@ -1,0 +1,2 @@
+# Archivos mínimos en ux0:data/pop-sot/ (rutas relativas, uno por línea)
+default.xbe
