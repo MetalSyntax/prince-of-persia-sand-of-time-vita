@@ -168,18 +168,64 @@ Android arm64 vía `port/android/CMakeLists.txt`) a la Vita. El submódulo no se
 5. **Archivos:** `ux0:data/pop-sot/` con nombres case-insensitive (`kernel_path.c` de Android es el patrón);
    sin `memfd_create` → memoria normal; paths con espacios y `ux0:` OK.
 
+> Corrección (2026-10-19): el punto 2 tal como estaba ("heap-backed con desplazamiento global") no basta: la
+> ventana contigua (`0x80000000`) y la RAM están a 2 GB de distancia y no caben con un solo desplazamiento en
+> la VA de usuario de la Vita. El punto 4 también: con *emutls* el coste de TLS existe pero es acotado.
+
+**Diseño aplicado (2026-10-19), verificado leyendo el código de upstream:**
+
+- **Memoria — MMU por software (`port/vita/compat/vvm.[ch]`).** `host = H + va` (32 bits con vuelta) se
+  resuelve por tabla de páginas de 4 KB: `vvm_ptr(f) = f + vvm_pt[f >> 12]` (tabla de 4 MB). Un **bloque
+  real de 112 MB** cubre de una vez NV2A/thunks/MCPX/flash/RAM (guest `0xFD000000..0x04000000` con la
+  vuelta) con desplazamiento 0: todo `H + va` del runtime en esas zonas es memoria real sin cambios. La
+  ventana contigua (64 MB, almacenamiento aparte **igual que upstream**, `xbox_memory_layout.c:2511`), la
+  apertura tiled (alias de la contigua), los espejos de RAM y las reservas `EXT_VMA` van por tabla.
+  `vvm.c` implementa `VirtualAlloc/Free/Protect` y `CreateFileMapping/MapViewOfFileEx`; las de
+  `win32_compat.c` se renombran con `-D`.
+- **`xbox_GetMemoryOffset()`** devuelve en Vita `contig_real - 0x80000000`: el ejecutor NV2A, OHCI y el
+  trazador hacen `mem + va` con `va` en la ventana contigua (`nv2a_pb_exec.c:120`, `dma_resolve`).
+- **`port/vita/tools/vitaize.py`** (corre en configure; falla si falta un ancla): copia a
+  `build/<dir>/vitaize/` el `recomp_types.h` del C generado con `XBOX_PTR()` por `vvm_ptr()` (pre-incluido
+  solo en `gen/`) y reescribe los accesos crudos `(uintptr_t)X + g_*_offset` del runtime (≈70) por
+  `vvm_ptr()`, más anclas: página de kernel falsa, `guest_probe.h`, `muldiv64` sin `__int128` (self-check
+  contra enteros de Python, 100 000 casos) y `s_hw` del backend GPU ausente.
+- **Ramas `__ANDROID__` del runtime** = su camino POSIX completo (particiones emuladas que el retail exige
+  para no volver al dashboard, rutas sin mayúsculas, pilas de 8 MB): activas en `win32_compat`,
+  `kernel_path/file/bridge`, `guest_vmem`, `nv2a_pb_scan`, `target_hooks`. Fuera: el layout (reservaría
+  4 GB) y `nv2a_pb_exec` (traería el encoder SDL/Vulkan).
+- **Registros guest `__thread`:** el GCC de VitaSDK usa *emutls*; GCC lo factoriza (≈3 200 llamadas a
+  `__emutls_get_address` en 74 000 instrucciones de `engine_0000.c`). Optimización pendiente (TPIDRURO).
+- **Host Vita (`port/vita/src`):** `main_vita.c` (espejo de `main_android.c`: SHA-256 del XBE, logs en
+  `ux0:data/pop-sot/logs/`), `fb_vita.c` (framebuffer guest → `sceDisplay` 725×544, sin vitaGL),
+  `input_vita.c` (SceCtrl + táctil trasero para Black/White), `audio_vita.c` (xa2_* → SceAudio). De
+  upstream tal cual: `options_android.c`, `host_files.c`, `sha256.c`, `scene.c`.
+- Render V0: `RECOMP_HW=0` → rasterizador por software del ejecutor NV2A sobre la memoria guest.
+- Lo que dejó la sesión anterior sin commitear (fork de 3 758 líneas de `xbox_memory_layout.c`, script que
+  apuntaba a un `.patch` inexistente, `qemu_shim.h` copiado que nunca se habría usado) está en
+  `port/vita/attic/` sin borrar.
+
 Fases concretas:
 
 - [ ] V0.1 `port/vita` del port (no del template): CMake que compila el **runtime rePOP** (kernel/audio/apu/
       usb/video + gen de retail) para ARM Vita con los flags guest (`-fwrapv -fsigned-char -ffp-contract=off
       -fno-strict-aliasing`), sin GPU (stub), con host propio mínimo (main/input/audio/archivos).
       Hito: **compila** (link completo), delegando en stubs lo GPU.
+      - [x] (2026-10-19) `cmake -S port/vita -B build/vita-port && make -C build/vita-port -j10` → link
+            completo sin símbolos sin resolver: `build/vita-port/pop-sot.vpk` 13 463 422 B (SHA-256
+            `5619b48b…`), ELF `.text` 26,1 MB / `.bss` 20,7 MB, heap newlib 256 MB, SFO `ATTRIBUTE2=12`.
+            Compilación completa ≈16 min a -j10 (M4). Solo compila: **no** probado en consola.
 - [ ] V0.2 Prueba de kernel: hilos guest, vblank 60 Hz por timer, `KeSetEvent` → el juego llega al checking de
-      discs / dibuja algo por software en un framebuffer → blit
-      640×480 con vitaGL→ 480×272. Hito: **cartel/logo o pantalla del juego visible** en la consola.
+      discs / dibuja algo por software en un framebuffer → blit a la pantalla.
+      Hito: **cartel/logo o pantalla del juego visible** en la consola.
+      Implementado sin verificar: hilos por `CreateThread`→pthread del runtime, vblank de upstream
+      (`RECOMP_VBLANK=1`), `fb_vita.c` (sceDisplay, sin vitaGL), rasterizador software (`RECOMP_HW=0`).
 - [ ] V0.3 Audio: `dsound_device`/WMA → SceAudio (decodificar WMA es igual que en Android).
+      `audio_vita.c` (xa2_* → SceAudio) hecho, pero la APU emulada de upstream depende de trampas de página
+      (AC'97/APU) que en Vita no saltan (`VirtualProtect` es no-op): **sin sonido** hasta resolverlo
+      (opción: `kuKernelRegisterExceptionHandler` de kubridge, o accesores explícitos en `vvm_ptr`).
 - [ ] V0.4 Input: SceCtrl con el mapeo del pad de Xbox (✕/◯ invertidos respecto a A/B de Xbox: X=A, ◯=B,
       □=X(sin espada), △=Y, R1=trig. der., L1=trig. izq./rebobinar, Select=BACK, Start=START).
+      `input_vita.c` hecho con ese mapeo + táctil trasero izq./der. = Black/White; sin verificar.
 - [ ] ⛔ **GATE 3R.1:** el juego arranca en la consola hasta el menú (aun a 1–5 fps, con el rasterizador
       software de respaldo o un framebuffer parcial) sin crashear y con logs legibles.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
