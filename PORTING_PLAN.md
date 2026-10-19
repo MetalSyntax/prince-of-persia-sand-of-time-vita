@@ -37,6 +37,39 @@ decompilación función a función, pero no elimina la verificación ni el traba
   El resto del `.text` se traduce automáticamente a C. Es genérica: serviría para más juegos del boilerplate. Riesgos:
   saltos indirectos, x87, rendimiento en Cortex-A9. Solo con prototipo y GATE propio (Fase 3B).
 
+> ⭐ **2026-10-19 — base de código encontrada: [FulGerNet/rePOP](https://github.com/FulGerNet/rePOP)** (rama `reSOT`,
+> submódulo en `upstream/rePOP`). Es la **Ruta B ya hecha para este juego**: recomp estática con xboxrecomp (parcheado),
+> C generado publicado en `source/xbox-{demo,retail}/gen` (87 + 111 MB), runtime con kernel/NV2A/USB/audio. Corre en
+> Windows (D3D11/Vulkan) y tiene app **Android arm64 (Vulkan, SDL3)**: compila para AArch64 sin tocar el C generado
+> (`-fwrapv -fsigned-char -ffp-contract=off -fno-strict-aliasing`). Licencia MIT solo para el código propio
+> (`docs/LICENSING.md`). Estado upstream: jugable en primeros niveles, validación en curso.
+>
+> Lo que falta para Vita (confirmado leyendo `docs/RECOMP.md` §Android host y el runtime):
+> 1. **Versión del XBE:** su retail es **NTSC, link 2003-10-20**; el nuestro es **PAL v2, link 2004-01-12** (mismo
+>    Title ID `5553001D`). Las direcciones no coinciden → conseguir el XBE NTSC o regenerar con su pipeline sobre el PAL.
+> 2. **Espacio de direcciones:** reserva los 4 GB de guest (`xbox_memory_layout.c`); en ARM32 no cabe. A favor:
+>    todo acceso pasa por `XBOX_PTR(addr) = addr + g_xbox_mem_offset` (`recomp_types.h:413`) → remapear rangos.
+> 3. **MMIO por SIGSEGV:** APU/AC'97/OHCI se atrapan con fallos de página; la Vita no tiene señales → chequeo explícito.
+> 4. **GPU:** backend nativo Vulkan/D3D11 → nuevo backend NV2A→vitaGL/GXM.
+> 5. **Recursos:** 512 MB RAM y Cortex-A9 vs Adreno 750 (que ya sufre caídas de FPS en upstream). Medir pronto.
+>
+> Implicación: la Ruta A (decomp manual) pasa a respaldo; la Fase 3B se reorienta a **portar el runtime de rePOP a
+> Vita**. Pendiente de replanificar con el usuario.
+>
+> **Decisión (2026-10-19):** el usuario consigue una copia **NTSC** para usar el C generado de rePOP tal cual.
+> - [x] (2026-10-19) `~/Downloads/Prince of Persia - The Sands of Time (USA).iso` (XISO plano, 2 500 657 152 B):
+>       `default.xbe` 4 603 904 B, Title ID `0x5553001D`, región NA+JP, link 2003-10-20, SHA-256
+>       `753c58b1…1ee379` = **coincide** con `upstream/rePOP/source/xbox-retail/target.h:22`. Leído directo del ISO
+>       sin extraer. Opcional: demo E3 2003 = `79C1A478…D4F5`.
+> - [x] (2026-10-19) XISO NTSC montada aparte del PAL: extraída con `extract-xiso -x` desde
+>       `/Volumes/TOSHIBA EXT/Xbox/Prince of Persia - The Sands of Time (USA).iso` (2 499 878 784 B, SHA-256 ISO
+>       `e90439f4…3262` — **difiere** del ISO de `~/Downloads`, es un rip distinto) a
+>       `/Volumes/TOSHIBA EXT/Xbox/iso-extracted/Prince of Persia - The Sands of Time (USA)/`,
+>       symlink `game_data_ntsc/`. El `default.xbe` extraído (4 603 904 B, región NA+JP, versión 42753, link
+>       2003-10-20) tiene SHA-256 `753c58b1…ee379` = **coincide** con `target.h:10` de rePOP; descrito en
+>       `docs/xbe_ntsc.md`, inventario en `docs/inventory_ntsc.md` (2,3 GB; MP4 desde `VIDEO/`, 84 `.int` NTSC).
+> - [ ] Probar el arranque del disco NTSC en xemu como referencia (difiere del rip de `~/Downloads`).
+
 ---
 
 ## 1. Datos en la Vita
@@ -107,12 +140,53 @@ verificación en xemu.
 - [ ] 3.4 Orden de módulos: utilidades/matemáticas → BIG/IO → recursos → render → mundo → IA → gameplay → UI.
 - [ ] 3.5 Medir el ritmo real con las primeras 50 funciones → alimentar el GATE 1.
 
-### Fase 3B — Prototipo de recompilación estática (solo si el usuario lo aprueba en el GATE 1)
+### Fase 3B — Prototipo de recompilación estática
 
-- [ ] 3B.1 Elegir 1 módulo pequeño. Traducir su código x86 a C automáticamente (registros como variables,
-      memoria plana). Compilar para ARM y medir la equivalencia contra xemu.
-- [ ] 3B.2 Capa HLE mínima de D3D8 sobre vitaGL para el frontend.
-- [ ] ⛔ **GATE 3B:** el frontend se renderiza en la Vita a ≥ 30 fps con el módulo traducido. Si no → abandonar 3B.
+> ⚠ Obsoleta (2026-10-19): sustituida por la **Fase 3R** (rePOP ya es esta recompilación, hecha).
+> Los antiguos 3B.1–3B.2 y el GATE 3B quedan en el historial de git.
+
+### Fase 3R — Port del runtime de rePOP (`upstream/rePOP`) a la Vita
+
+**Decisión del usuario (2026-10-19):** avanzar la Ruta B con rePOP: usar el C generado de
+`upstream/rePOP/source/xbox-retail/gen` (XBE NTSC verificado) y portar el runtime (el mismo que compila para
+Android arm64 vía `port/android/CMakeLists.txt`) a la Vita. El submódulo no se edita; todo va en el propio port.
+
+**Modelo:** espejar `port/android/` de rePOP, con estos huecos a cerrar (todos confirmados en `docs/RECOMP.md`
+§Android y en el código):
+
+1. **GPU:** el encoder nativo (SDL3-GPU/Vulkan, HLSL→SPIR-V con dxc) no existe en Vita → backend propio
+   NV2A→vitaGL/GXM. El estado NV2A, el executor de pushbuffer y el intérprete VSH se comparten; el encoder
+   es lo que se escribe (`nv2a_hw_native.inc` queda excluido). Vertex programs de NV2A → shaders GLSL ES;
+   register combiners → shaders o estado fijo; texturas por el decodificador software ya existente.
+2. **Memoria/espacio de direcciones:** sin `mmap`/VMA en Vita (newlib/SceKernel). La RAM real de Xbox es 64 MB
+   → heap-backed con desplazamiento global (recomp_types.h:413 `XBOX_PTR(addr) = addr + g_xbox_mem_offset`)
+   y rangos MMIO a direcciones fuera del heap. No se reserva nada con PROT_NONE.
+3. **MMIO por señales:** `apu_mmio_hook.c`, `ohci.c` y la trampa AC'97 usan SIGSEGV + decode de instrucción;
+   en Vita se convierte a **chequeo explícito de rangos** en los accessors (misma lógica, sin señales).
+4. **Hilos/sincronización:** pthread de Vita (ScePthread) desde el SDK; 60 Hz de vblank con SceKernelTimer,
+   1 warn del runtimes: pilas de hilos guest más pequeñas (Android usa 8 MB por defecto — no cabe).
+5. **Archivos:** `ux0:data/pop-sot/` con nombres case-insensitive (`kernel_path.c` de Android es el patrón);
+   sin `memfd_create` → memoria normal; paths con espacios y `ux0:` OK.
+
+Fases concretas:
+
+- [ ] V0.1 `port/vita` del port (no del template): CMake que compila el **runtime rePOP** (kernel/audio/apu/
+      usb/video + gen de retail) para ARM Vita con los flags guest (`-fwrapv -fsigned-char -ffp-contract=off
+      -fno-strict-aliasing`), sin GPU (stub), con host propio mínimo (main/input/audio/archivos).
+      Hito: **compila** (link completo), delegando en stubs lo GPU.
+- [ ] V0.2 Prueba de kernel: hilos guest, vblank 60 Hz por timer, `KeSetEvent` → el juego llega al checking de
+      discs / dibuja algo por software en un framebuffer → blit
+      640×480 con vitaGL→ 480×272. Hito: **cartel/logo o pantalla del juego visible** en la consola.
+- [ ] V0.3 Audio: `dsound_device`/WMA → SceAudio (decodificar WMA es igual que en Android).
+- [ ] V0.4 Input: SceCtrl con el mapeo del pad de Xbox (✕/◯ invertidos respecto a A/B de Xbox: X=A, ◯=B,
+      □=X(sin espada), △=Y, R1=trig. der., L1=trig. izq./rebobinar, Select=BACK, Start=START).
+- [ ] ⛔ **GATE 3R.1:** el juego arranca en la consola hasta el menú (aun a 1–5 fps, con el rasterizador
+      software de respaldo o un framebuffer parcial) sin crashear y con logs legibles.
+- [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
+- [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
+- [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.
+
+### Fases 4–6 (Ruta A, respaldo; conservadas del plan original)
 
 ## Fase 4 — Build portable en PC (referencia)
 
@@ -124,7 +198,7 @@ Requiere la Fase 3 al 100 % (o 3B validada).
       guardado en un punto de guardado.
 - [ ] ⛔ **GATE 4:** el primer acto es jugable en escritorio con datos Xbox, sin crashes.
 
-## Fase 5 — Vita
+## Fase 5 — Vita (Ruta A)
 
 - [ ] 5.1 `port/vita`: archivos `ux0:data/pop-sot/`, input (controles: ✕ saltar, □ ataque, ◯ rodar/soltar,
       △ acción, R1 bloquear/pared, L1 rebobinar, táctil trasero para el poder secundario), audio SceAudio,

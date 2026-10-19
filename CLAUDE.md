@@ -8,7 +8,8 @@ Método y referencias: `../../README.md` y `~/MD/xbox-to-vita-ports.md` (THUG y 
 
 | Ruta | Qué es | ¿Se commitea? |
 |---|---|---|
-| `game_data/` | symlink a la XISO extraída (solo lectura, nunca modificar) | No |
+| `game_data/` | symlink a la XISO PAL extraída (solo lectura, nunca modificar) | No |
+| `game_data_ntsc/` | symlink a la XISO **NTSC** extraída (disco de rePOP, referencia del port) | No |
 | `docs/xbe.md`, `docs/inventory.md` | cabecera del XBE e inventario de datos generados por `new-port.sh` | Sí |
 | `PORTING_PLAN.md` | plan por fases con puertas de decisión: **fuente de verdad del estado** | Sí |
 | `re/` | notas de ingeniería inversa (`re/NOTES.md`); proyecto Ghidra y exports ignorados | Solo notas |
@@ -25,7 +26,10 @@ Método y referencias: `../../README.md` y `~/MD/xbox-to-vita-ports.md` (THUG y 
 ## Hallazgos clave (detalle y evidencia en `PORTING_PLAN.md` §0)
 
 - Disco Xbox **PAL** `US-029` v2, XDK 5558; motor **Jade**; vídeos Bink (`.int`), bigfile `prince.bf` (`BIG\0`).
-- **Sin base de código** usable: el plan es una decompilación clean-room del XBE (Ruta A) o recompilación estática + HLE (Ruta B, experimental).
+- **Disco Xbox NTSC** (2026-10-19, `game_data_ntsc/`): `default.xbe` **idéntico** al de
+  `upstream/rePOP/source/xbox-retail/target.h:10` (SHA-256 `753c58b1…ee379`, link 2003-10-20). Es el disco de
+  referencia del port; el C generado de rePOP aplica tal cual. Ver `docs/xbe_ntsc.md` y `docs/inventory_ntsc.md`.
+- **Base de código: `upstream/rePOP`** (submódulo, [FulGerNet/rePOP](https://github.com/FulGerNet/rePOP), rama `reSOT`): recomp estática de este juego ya jugable en PC/Android arm64. **Muy importante para el port**: es la base de la Ruta B. Brechas para Vita en `PORTING_PLAN.md` §0 (XBE NTSC≠PAL, 4 GB guest, MMIO por SIGSEGV, GPU Vulkan). No editar el submódulo; cambios propios en `port/vita/`. Actualizar con `git submodule update --remote upstream/rePOP`.
 - No usar el código filtrado de Jade salvo decisión explícita del usuario.
 
 ## Reglas para el agente (IA)

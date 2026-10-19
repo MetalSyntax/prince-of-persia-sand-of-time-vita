@@ -1,0 +1,4 @@
+[submodule "upstream/rePOP"]
+	path = upstream/rePOP
+	url = https://github.com/FulGerNet/rePOP
+	branch = reSOT
