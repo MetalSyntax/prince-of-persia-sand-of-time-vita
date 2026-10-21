@@ -307,6 +307,17 @@ Fases concretas:
       ese bloque) y se vuelve al rasterizador por software, con vitaGL ya dueño de toda la CDRAM y la phycont.
       Arreglo: los vértices (solo CPU) en un memblock USER_RW propio, pedido antes de `vglInitExtended`.
       Pendiente: cuarta prueba.
+- [ ] (2026-10-21) **Cuarta prueba en consola** (`logs/log_004.log` + `.psp2dmp`): vitaGL activo (flips con 22–110
+      draws, 0,1 fps al principio: compilación de shaders), audio del vídeo de Ubisoft, pantalla negra y crash.
+      - Crash: data abort en `sub_000613F0` (código del juego): `vldr` de un float en el VA desalineado
+        0x004782DD (x86 lo permite, ARM no). Arreglo en `vitaize.py`: `MEMF`/`MEMD`/`SMEM64` con tipos de
+        alineación 1 (GCC emite `ldr`+`vmov`/`vld1`, válidos en ARMv7).
+      - Negro: vitaGL solo admite GL desde el hilo de `vglInit` (`shared.h`, THREAD_SAFE) y durante los vídeos
+        el hilo principal componía y hacía `vglSwapBuffers`. Ahora repinta el hilo de GL (`nv2a_ack_thread`,
+        ancla en `vitaize.py` → `vita_gl_idle_tick`, cada 16 ms) y `ng_compose` rechaza otros hilos.
+      - `vglUseCachedMem(GL_TRUE)` (como Advena, N.O.V.A 2, GT Racing): subidas de vídeo/texturas más rápidas.
+      Revisión de los ports de `/Volumes/TOSHIBA EXT/PSVITA Develop`: todos llaman a GL desde un único hilo;
+      relojes 444/222/222/166 y ATTRIBUTE2=12 como aquí; `-ffast-math` no aplica al C recompilado (semántica x87).
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

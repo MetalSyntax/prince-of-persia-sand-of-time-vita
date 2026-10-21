@@ -37,6 +37,7 @@ void vglSwapBuffers(GLboolean has_commondialog);
 #else
 #include <vitaGL.h>
 #include <psp2/kernel/sysmem.h>
+#include <psp2/kernel/threadmgr.h>
 #define VG_MSAA_NONE SCE_GXM_MULTISAMPLE_NONE
 #define VG_RT_FLIP_DEFAULT 1        /* hipótesis: vitaGL guarda los FBO de arriba abajo */
 #define VG_VERTEX_SHADER   GL_CG_VERTEX_SHADER_EXT
@@ -83,6 +84,7 @@ typedef struct { uint32_t key, ninputs; uint8_t inputs[8]; GLuint vs; } VgVsp;
 
 static struct {
     int active, ysign, gpu_vsh;
+    int gl_thread;   /* el de vglInit: vitaGL no admite GL desde otro */
     VgVsp vsp[VG_MAX_VSP];
     uint32_t nvsp;
     VgSurface surfaces[HW_MAX_SURFACES], *front, *largest;
@@ -497,11 +499,19 @@ static int ng_init(const char *backend)
     }
     /* 32 MB de RAM quedan para el runtime (pilas de los hilos que el juego crea
      * después, archivos); vitaGL toma el resto de la memoria libre para su pool. */
+    /* Pool de RAM de vitaGL con caché (como Advena, N.O.V.A 2, GT Racing): la CPU escribe ahí
+     * cada cuadro de vídeo (glTexSubImage2D) y las texturas del juego; sin caché es lento. */
+#if !defined(RESOT_HW_GLSL)
+    vglUseCachedMem(GL_TRUE);
+#endif
     fprintf(stderr, "[HW vita] vglInitExtended (deja 32 MB de RAM al runtime)\n");
     if (!vglInitExtended(0, VG_SCREEN_W, VG_SCREEN_H, 32 * 1024 * 1024, VG_MSAA_NONE)) {
         fprintf(stderr, "[HW vita] vglInitExtended falló: rasterizador por software\n");
         return 0;
     }
+#if !defined(RESOT_HW_GLSL)
+    s_vg.gl_thread = sceKernelGetThreadId();
+#endif
     s_vg.ysign = (flip && *flip ? atoi(flip) : VG_RT_FLIP_DEFAULT) ? -1 : 1;
     s_vg.gpu_vsh = !(getenv("RECOMP_VITA_CPU_VSH") && atoi(getenv("RECOMP_VITA_CPU_VSH")));
     vg_blit_init();
@@ -1162,6 +1172,13 @@ static void ng_compose(void)
     const uint32_t *pixels;
     uint32_t w, h, rect[4], serial;
     float pw = VG_SCREEN_H * s_hw.aspect, ph = VG_SCREEN_H, px, py = 0;
+#if !defined(RESOT_HW_GLSL)
+    if (sceKernelGetThreadId() != s_vg.gl_thread) {
+        static int told;
+        if (!told++) fprintf(stderr, "[HW vita] compose desde otro hilo (no el de vglInit): ignorado\n");
+        return;
+    }
+#endif
     if (pw > VG_SCREEN_W) { pw = VG_SCREEN_W; ph = VG_SCREEN_W / s_hw.aspect; py = (VG_SCREEN_H - ph) * 0.5f; }
     px = (VG_SCREEN_W - pw) * 0.5f;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);

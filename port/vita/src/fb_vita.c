@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <pthread.h>
 
 #include <psp2/display.h>
@@ -217,13 +218,8 @@ void vita_fb_pump(void)
 {
     int y, x;
     if (g_xbox_mem_offset) overlay_tick();
-    if (s_hw_mode) {
-        /* vitaGL tiene la pantalla; un juego que no hace flips (un vídeo, una
-         * carga) se repinta desde aquí, como el hilo de ventana de fb_present.c */
-        extern void nv2a_hw_idle_present(void);
-        nv2a_hw_idle_present();
-        return;
-    }
+    if (s_hw_mode)
+        return;   /* vitaGL tiene la pantalla: repinta vita_gl_idle_tick, en el hilo de GL */
     if (s_shown_serial == s_frame_serial) return;
     pthread_mutex_lock(&s_frame_lock);
     for (y = 0; y < SCR_H; y++) {
@@ -234,6 +230,21 @@ void vita_fb_pump(void)
     s_shown_serial = s_frame_serial;
     pthread_mutex_unlock(&s_frame_lock);
     flip();
+}
+
+/* Hilo de GL (nv2a_ack_thread, vía vitaize.py): un juego que no hace flips (un
+ * vídeo, una carga) se repinta desde aquí, como el hilo de ventana de
+ * fb_present.c, a lo sumo cada 16 ms. */
+void vita_gl_idle_tick(void)
+{
+    extern void nv2a_hw_idle_present(void);
+    static uint32_t last;
+    uint32_t now;
+    if (!s_hw_mode) return;
+    { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); now = (uint32_t)(ts.tv_sec * 1000u + ts.tv_nsec / 1000000); }
+    if (now - last < 16) return;
+    last = now;
+    nv2a_hw_idle_present();
 }
 
 /* ── la interfaz de video/fb_present.c ─────────────────────── */

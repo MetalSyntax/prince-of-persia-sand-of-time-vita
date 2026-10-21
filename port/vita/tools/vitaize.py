@@ -109,6 +109,12 @@ ANCHORS = {
         # La página de kernel falsa vive en la ventana contigua (memoria aparte en Vita).
         ("            ? (void *)kernel_native\n",
          "            ? (void *)vvm_ptr((uint32_t)kernel_native)\n"),
+        # vitaGL solo admite GL desde el hilo de vglInit, que es este (el ejecutor):
+        # los repintados sin flips del juego (vídeos, cargas) se hacen aquí y no en
+        # el hilo principal (consola 2026-10-21: vídeo negro con audio).
+        ("        if (g_nv2a_kick_ev)\n            WaitForSingleObject(g_nv2a_kick_ev, 1);\n",
+         "        { extern void vita_gl_idle_tick(void); vita_gl_idle_tick(); }\n"
+         "        if (g_nv2a_kick_ev)\n            WaitForSingleObject(g_nv2a_kick_ev, 1);\n"),
     ],
     "target_hooks.c": [
         # Que use la copia traducida de guest_probe.h (misma carpeta rt/).
@@ -278,6 +284,19 @@ def patch_recomp_types(src, dst):
         sys.exit("vitaize: ancla XBOX_PTR no encontrada en %s" % src)
     text = text.replace(old, "#include \"vvm.h\"\n"
                         "#define XBOX_PTR(addr) ((uintptr_t)vvm_ptr((uint32_t)(addr) + (uint32_t)g_xbox_mem_offset))")
+    # x86 lee float/double/int64 en cualquier dirección; en ARM vldr/vstr/ldrd exigen
+    # alineación y dan data abort (consola, 2026-10-21: float en el VA 0x004782DD,
+    # sub_000613F0). Con alineación 1 GCC emite ldr/str + vmov, válidos en ARMv7.
+    for name, ctype in (("SMEM64", "int64_t"), ("MEMF", "float"), ("MEMD", "double")):
+        text, n = re.subn(r"(#define %s\(addr\)\s+\(\*\(volatile )%s(\s*\*\)XBOX_PTR\(addr\)\))" % (name, ctype),
+                          r"\g<1>vz_a1_%s\2" % ctype, text)
+        if n != 1:
+            sys.exit("vitaize: ancla %s no encontrada en %s" % (name, src))
+    text = text.replace("#define XBOX_PTR(addr)",
+                        "typedef int64_t vz_a1_int64_t __attribute__((aligned(1)));\n"
+                        "typedef float vz_a1_float __attribute__((aligned(1)));\n"
+                        "typedef double vz_a1_double __attribute__((aligned(1)));\n"
+                        "#define XBOX_PTR(addr)", 1)
     write_if_changed(dst, text)
 
 
