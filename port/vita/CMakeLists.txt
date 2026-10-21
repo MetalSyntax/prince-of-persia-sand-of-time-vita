@@ -61,6 +61,7 @@ set(VITAIZED
   apu/apu_core.c apu/apu_vp.c apu/apu_dsp.c apu/apu_mmio_hook.c
   port/game/recomp_manual.c port/game/guest_probe.h source/${TARGET_ID}/target_hooks.c
   platform/win32_compat.c kernel/guest_vmem.c port/windows/src/scene.c kernel/nv2a_hw_d3d11.inc
+  kernel/kernel_path.c
   ${DSOUND_GEN})
 set(_vz_inputs "${CMAKE_CURRENT_SOURCE_DIR}/tools/vitaize.py" "${TGT}/gen/recomp_types.h")
 foreach(f IN LISTS VITAIZED)
@@ -82,7 +83,7 @@ endif()
 # ── runtime compartido, como lo compila Android ────────────────
 set(RUNTIME_SOURCES
   ${VZ}/rt/win32_compat.c
-  ${RT}/kernel/kernel_path.c ${RT}/kernel/kernel_pool.c ${VZ}/rt/kernel_rtl.c
+  ${VZ}/rt/kernel_path.c ${RT}/kernel/kernel_pool.c ${VZ}/rt/kernel_rtl.c
   ${RT}/kernel/kernel_memory.c ${RT}/kernel/kernel_file.c ${RT}/kernel/kernel_thread.c
   ${RT}/kernel/kernel_sync.c ${VZ}/rt/kernel_hal.c ${RT}/kernel/kernel_xbox.c
   ${RT}/kernel/kernel_ob.c ${RT}/kernel/kernel_io.c ${RT}/kernel/kernel_crypto.c
@@ -123,7 +124,7 @@ add_executable(${PROJECT_NAME} ${RUNTIME_SOURCES} ${HOST_SOURCES} ${VZ}/rt/targe
 # ejecutor NV2A (incluiría el encoder SDL/Vulkan).
 set_source_files_properties(
   ${VZ}/rt/win32_compat.c
-  ${RT}/kernel/kernel_path.c ${RT}/kernel/kernel_file.c ${VZ}/rt/kernel_bridge.c
+  ${VZ}/rt/kernel_path.c ${RT}/kernel/kernel_file.c ${VZ}/rt/kernel_bridge.c
   ${VZ}/rt/guest_vmem.c ${RT}/kernel/nv2a_pb_scan.c ${VZ}/rt/target_hooks.c
   PROPERTIES COMPILE_DEFINITIONS "__ANDROID__=1")
 # Su VirtualAlloc/vistas mmap se sustituyen por compat/vvm.c.

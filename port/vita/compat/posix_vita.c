@@ -11,6 +11,7 @@
 #include <psp2/kernel/sysmem.h>
 
 #include "sys/sysinfo.h"
+#include "platform/win32_compat.h"
 
 int posix_memalign(void **out, size_t align, size_t size)
 {
@@ -66,4 +67,16 @@ int fnmatch(const char *pattern, const char *string, int flags)
             return FNM_NOMATCH;
     }
     return *string ? FNM_NOMATCH : 0;
+}
+
+/* Tamaño lógico de .devices/PartitionN.img (vitaize: kernel_path.c ya no las
+ * rellena). Los mismos sectores que la tabla que sintetiza kernel_path.c. */
+void vita_partition_length(HANDLE h, LARGE_INTEGER *size)
+{
+    static const uint32_t sectors[6] = { 0, 0x00465400, 0x000FA000, 0x00177000, 0x00177000, 0x00177000 };
+    const char *path = h && h != INVALID_HANDLE_VALUE ? w32_handle_path(h) : NULL;
+    const char *img = path ? strstr(path, "/.devices/Partition") : NULL;
+    int n = img ? img[19] - '0' : -1;
+    if (n >= 1 && n <= 5 && !strcmp(img + 20, ".img"))
+        size->QuadPart = (LONGLONG)sectors[n] * 512;
 }

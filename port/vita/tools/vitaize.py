@@ -153,6 +153,21 @@ ANCHORS = {
          "            memset(vvm_ptr((uint32_t)((uintptr_t)s_lo + (uintptr_t)s_offset\n"
          "                            + (size_t)p * VMEM_PAGE)), 0, VMEM_PAGE);\n"),
     ],
+    # Particiones del disco duro emulado: upstream las crea a tamaño completo con
+    # ftruncate (huecas en ext4/f2fs de Android). En exFAT (ux0: y el disco del
+    # Mac) son 4,9 GB reales y el juego solo lee Partition0 en crudo; el tamaño
+    # que pide (IOCTL_DISK_GET_PARTITION_INFO) sale de la tabla.
+    "kernel_path.c": [
+        ("            ok = ftruncate(fileno(f), (off_t)sectors[p] * 512) == 0;\n",
+         "            ok = 1;   /* reSOT Vita: sin reservar; tamaño en vita_partition_length() */\n"),
+    ],
+    "kernel_bridge.c": [
+        ("        if (h && h != INVALID_HANDLE_VALUE)\n            GetFileSizeEx(h, &size);\n"
+         "        BRIDGE_MEM32(out_va +  0) = 0;                       /* StartingOffset */\n",
+         "        if (h && h != INVALID_HANDLE_VALUE)\n            GetFileSizeEx(h, &size);\n"
+         "        { extern void vita_partition_length(HANDLE, LARGE_INTEGER *); vita_partition_length(h, &size); }\n"
+         "        BRIDGE_MEM32(out_va +  0) = 0;                       /* StartingOffset */\n"),
+    ],
     "win32_compat.c": [
         ("    if (stackSize < (8u << 20))\n        stackSize = 8u << 20;\n",
          "    if (stackSize < (1u << 20))\n        stackSize = 1u << 20;\n"),
