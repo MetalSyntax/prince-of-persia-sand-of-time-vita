@@ -284,6 +284,11 @@ Fases concretas:
       del 2026-10-20 (PC en `glTexImage2D` y `glVertexAttribPointer` de vitaGL) son vitaGL sin memoria con
       `NO_DEBUG=1`; con `RECOMP_HW=0` por defecto vitaGL no se inicia. **Pendiente: arranque en consola**
       (la consola no respondía por FTP; sin logs nuevos de ella).
+- [x] (2026-10-21) **Datos reducidos para la Vita:** `port/vita/tools/extract_game_data.py` (como el de
+      nfsmw-vita): copia o sube por FTP solo lo que el port lee; 2,4 GB → 1,66 GB (73 archivos). Fuera POP1/POP2
+      (bonus con XBE propio), update/dashupdate.xbe y variantes de idioma 1..4 (el runtime contesta inglés y
+      los logs abren soundx0/poplogo0/pop_in0/pop_out0). *Hipótesis:* CINE_9010 es la cinemática inglesa
+      (no se ha llegado a ella); `--all-languages` si faltara. Comprueba el SHA-256 del XBE.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.
