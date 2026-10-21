@@ -9,6 +9,7 @@
  * El hilo principal lleva la pantalla y el mando; el punto de entrada elevado
  * corre en un hilo propio con pila grande, como en Android.
  */
+#include <dirent.h>
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -32,9 +33,12 @@
 #include "vvm.h"
 #include "manifest.h"
 
-/* newlib: el heap del proceso. El bloque guest (112 MB) y la ventana contigua
- * (64 MB) salen de aquí; el resto es del runtime (vídeo, sonido, archivos). */
-int _newlib_heap_size_user = 256 * 1024 * 1024;
+/* newlib: el heap del runtime (vídeo, sonido, archivos, vértices del backend
+ * GPU). Lo grande (bloque guest, ventana contigua, arena EXT_VMA) lo pide
+ * compat/vvm.c aparte con sceKernelAllocMemBlock, ya con el log abierto: con
+ * 256 MB aquí la Vita no tenía memoria y newlib fallaba antes de main, sin log
+ * (primer .psp2dmp en consola, 2026-10-20: LR en _init_vita_heap). */
+int _newlib_heap_size_user = 96 * 1024 * 1024;
 /* pthread_create sin atributos: 32 KB en VitaSDK (1 MB en Android). Los hilos
  * de temporizador del runtime ejecutan código del juego (DPC/APC). */
 unsigned int _pthread_stack_default_user = 1024 * 1024;
@@ -57,14 +61,22 @@ static volatile int s_game_running;
 
 const char *resot_android_data_dir(void) { return DATA_DIR; }
 
-static void redirect_log(FILE *stream, const char *name)
+/* logs/log_NNN.log: el siguiente al número más alto que exista (001..999,
+ * después vuelve a 001). stdout y stderr van al mismo archivo, en modo append. */
+static void open_log(void)
 {
-    char path[256], prev[256];
-    snprintf(path, sizeof path, DATA_DIR "/logs/%s.txt", name);
-    snprintf(prev, sizeof prev, DATA_DIR "/logs/%s-prev.txt", name);
-    remove(prev);
-    rename(path, prev);
-    freopen(path, "w", stream);
+    char path[256];
+    int last = 0, n;
+    FILE *f;
+    DIR *d = opendir(DATA_DIR "/logs");
+    struct dirent *e;
+    while (d && (e = readdir(d)) != NULL)
+        if (sscanf(e->d_name, "log_%3d.log", &n) == 1 && n > last && n <= 999) last = n;
+    if (d) closedir(d);
+    snprintf(path, sizeof path, DATA_DIR "/logs/log_%03d.log", last % 999 + 1);
+    if ((f = fopen(path, "w")) != NULL) fclose(f);
+    freopen(path, "a", stderr);
+    freopen(path, "a", stdout);
 }
 
 static void fail(const char *message)
@@ -230,8 +242,7 @@ int main(void)
     sceIoMkdir(DATA_DIR, 0777);
     sceIoMkdir(DATA_DIR "/logs", 0777);
     sceIoMkdir(DATA_DIR "/saves", 0777);
-    redirect_log(stderr, RESOT_TARGET_ID "-err");
-    redirect_log(stdout, RESOT_TARGET_ID "-out");
+    open_log();
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);   /* ponytail: por línea, para no perder el final al crashear */
     chdir(DATA_DIR);

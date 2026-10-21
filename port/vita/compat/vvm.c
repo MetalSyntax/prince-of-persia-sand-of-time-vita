@@ -14,6 +14,9 @@
  *   VirtualAlloc(H+0xFD000000...)     -> NV2A/MCPX/flash: ya reales en B
  */
 #include <malloc.h>
+#ifdef __vita__
+#include <psp2/kernel/sysmem.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -47,7 +50,7 @@ static size_t    s_committed;
  * contiguo lo que el guest ve contiguo; más allá, tramos sueltos (con aviso).
  * ponytail: tamaño fijo; subirlo si el log muestra "fuera de la arena". */
 #ifndef VVM_EXT_ARENA_MB
-#define VVM_EXT_ARENA_MB 64
+#define VVM_EXT_ARENA_MB 32   /* pico medido hasta el menú: 18,5 MB */
 #endif
 #define EXT_ARENA ((uint32_t)VVM_EXT_ARENA_MB << 20)
 static uint32_t  s_ext_host, s_ext_size, s_ext_peak;
@@ -86,7 +89,26 @@ static void void_range(uint32_t host, size_t len, int state)
 
 static uint8_t *alloc_zeroed(size_t len)
 {
-    uint8_t *p = memalign(PAGE, len);
+    uint8_t *p = NULL;
+#ifdef __vita__
+    /* Lo grande va en su propio memblock, fuera del heap de newlib
+     * (src/main_vita.c): si no hay memoria queda en el log con cifras. */
+    if (len >= (8u << 20)) {
+        SceKernelFreeMemorySizeInfo fm = { sizeof fm };
+        SceUID id = sceKernelAllocMemBlock("pop-guest", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW,
+                                           (SceSize)((len + 0xFFFFF) & ~(size_t)0xFFFFF), NULL);
+        if (id < 0 || sceKernelGetMemBlockBase(id, (void **)&p) < 0) {
+            sceKernelGetFreeMemorySize(&fm);
+            fprintf(stderr, "[VVM] sceKernelAllocMemBlock(%u MB) falló 0x%08X; libre user %u MB\n",
+                    (unsigned)(len >> 20), (unsigned)id, (unsigned)(fm.size_user >> 20));
+            return NULL;
+        }
+        memset(p, 0, len);
+        s_committed += len;
+        return p;
+    }
+#endif
+    p = memalign(PAGE, len);
     if (p) { memset(p, 0, len); s_committed += len; }
     return p;
 }
