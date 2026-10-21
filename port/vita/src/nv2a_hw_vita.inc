@@ -496,6 +496,36 @@ static void vg_blit(GLuint tex, float x, float y, float w, float h, float fbw, f
 
 /* ── init ────────────────────────────────────────────────── */
 
+#if !defined(RESOT_HW_GLSL)
+/* Errores internos de vitaGL/GXM al log del port (vendor/vitaGL: LOG_ERRORS y gxm.c). */
+void vgl_log_hook(const char *fmt, ...)
+{
+    static unsigned n;
+    va_list ap;
+    if (++n > 200) return;   /* el mismo error cada frame no debe llenar la tarjeta */
+    fputs("[vitaGL] ", stderr);
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+}
+
+/* Lo que de verdad va a pantalla: el callback de la cola de display recibe el búfer. */
+static volatile uint32_t s_disp_frames, s_disp_center, s_disp_bar;
+static void vg_display_cb(void *fb)
+{
+    const volatile uint32_t *p = (const volatile uint32_t *)fb;
+    s_disp_frames++;
+    s_disp_center = p[(VG_SCREEN_H / 2) * 960 + VG_SCREEN_W / 2];   /* stride 960 (VGL_ALIGN 64) */
+    s_disp_bar = p[(VG_SCREEN_H / 2) * 960 + 8];
+}
+
+void vgl_gxm_error_hook(const char *what, int code)
+{
+    static unsigned n;
+    if (++n <= 50) fprintf(stderr, "[vitaGL] %s falló: 0x%08X\n", what, (unsigned)code);
+}
+#endif
+
 static int ng_init(const char *backend)
 {
     static const uint32_t white[6] = {~0u, ~0u, ~0u, ~0u, ~0u, ~0u};
@@ -533,6 +563,9 @@ static int ng_init(const char *backend)
         fprintf(stderr, "[HW vita] vglInitExtended falló: rasterizador por software\n");
         return 0;
     }
+#if !defined(RESOT_HW_GLSL)
+    vglSetDisplayCallback(vg_display_cb);
+#endif
 #if !defined(RESOT_HW_GLSL)
     s_vg.gl_thread = sceKernelGetThreadId();
 #endif
@@ -1256,6 +1289,10 @@ static void ng_compose(void)
             glReadPixels(8, VG_SCREEN_H / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, b);
             fprintf(stderr, "[HW vita] compose (%s): centro %02X%02X%02X, esquina roja %02X%02X%02X, barra azul %02X%02X%02X\n",
                     s_vg.blit_ffp ? "blit FFP" : "blit CG", c[0], c[1], c[2], r[0], r[1], r[2], b[0], b[1], b[2]);
+#if !defined(RESOT_HW_GLSL)
+            fprintf(stderr, "[HW vita] display: %u fotogramas en pantalla, centro 0x%08X, barra 0x%08X (ABGR)\n",
+                    (unsigned)s_disp_frames, (unsigned)s_disp_center, (unsigned)s_disp_bar);
+#endif
             fprintf(stderr, "[HW vita] compose: front %s %ux%u, vídeo %s, error GL 0x%X\n",
                     s_vg.front ? "sí" : "no", s_vg.front ? s_vg.front->w : 0, s_vg.front ? s_vg.front->h : 0,
                     xbox_FramebufferOverlayGet(&pixels, &w, &h, rect, &serial) ? "sí" : "no", glGetError());

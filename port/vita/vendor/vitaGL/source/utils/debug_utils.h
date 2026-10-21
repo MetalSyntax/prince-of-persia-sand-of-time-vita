@@ -31,7 +31,9 @@ extern "C" {
 // Debugging tool
 char *get_gxm_error_literal(uint32_t code);
 #ifdef LOG_ERRORS
-#define vgl_log sceClibPrintf
+// pop-sot: el port puede recoger los mensajes en su log (vgl_log_hook); si no, sceClibPrintf
+extern void vgl_log_hook(const char *fmt, ...) __attribute__((weak));
+#define vgl_log(...) do { if (vgl_log_hook) vgl_log_hook(__VA_ARGS__); else sceClibPrintf(__VA_ARGS__); } while (0)
 #else
 #define vgl_log(...)
 #endif
