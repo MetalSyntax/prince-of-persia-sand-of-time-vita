@@ -336,6 +336,16 @@ Fases concretas:
       compilaba sin `SOFTFP_ABI=1`: sin `HAVE_SOFTFP_ABI` no envuelve `sceGxmSetViewport` (floats en s0–s5)
       y el viewport recibe basura: todo fuera de pantalla, sin errores. PoP Classic/Zenonia usan `SOFTFP_ABI=1`.
       Arreglo: `SOFTFP_ABI=1` en el BUILD_COMMAND de vitaGL. Pendiente: confirmar con vgltest y el juego.
+- [x] (2026-10-21) **Primera imagen en consola** con `SOFTFP_ABI=1`: vgltest rojo/verde; en el juego el cuadro
+      rojo, las barras azules y el vídeo de Ubisoft (log_008: blit CG con el color del vídeo; el FFP leía negro).
+      Problemas vistos: vídeo a 1–5 fps a tirones, sonido entrecortado, título y perfil volteados.
+- [ ] (2026-10-21) **Tras log_008:** fuera barras/cuadro/blit FFP/glReadPixels (cada lectura paraba la GPU);
+      `VG_RT_FLIP_DEFAULT` 0 en la Vita (con 1, FBO volteados); vídeo: huella del cuadro YUY2 para no convertir ni
+      subir 1 MB cada 16 ms si Bink no cambió, y repintado sin flips solo con cuadro nuevo o cada 100 ms; audio:
+      cola 12/32 tramas (antes 4/16; la APU llega 94 ms tarde: 30–60 % de tramas vacías); log: 40 líneas por
+      etiqueta cada 10 s (`[READ]` escribía una por lectura de disco). CPU en régimen (log_008):
+      kernel_timer_thread ~60 %, nv2a_ack_thread ~60 %, game_main ~50 %, APU ~27 %. Sin speedhacks de vitaGL:
+      `DRAW_SPEEDHACK` no copia los vértices de cliente y el backend reutiliza su búfer en cada draw.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

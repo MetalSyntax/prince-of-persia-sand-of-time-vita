@@ -2,7 +2,9 @@
  * reSOT Vita - salida de audio de la APU emulada: la interfaz xa2_* de
  * src/apu/apu_xaudio2.h sobre SceAudio, con la política de cola de
  * port/android/src/audio_android.c: tramas de 256 muestras estéreo de 16 bits
- * a 48 kHz; se cebado con 4 de silencio al vaciarse y se descarta a partir de 16.
+ * a 48 kHz. Cola más honda que en Android: en consola la APU llega hasta 94 ms
+ * tarde (log_008: 30-60 % de tramas sin datos, sonido entrecortado), así que se
+ * ceba con 12 de silencio (64 ms) al vaciarse y se descarta a partir de 32 (170 ms).
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -15,9 +17,9 @@
 
 #define XA2_SAMPLE_RATE 48000
 #define XA2_BUF_SAMPLES 256
-#define XA2_QUEUE_PRIME 4
-#define XA2_QUEUE_MAX   16
-#define RING            32   /* > XA2_QUEUE_MAX */
+#define XA2_QUEUE_PRIME 12
+#define XA2_QUEUE_MAX   32
+#define RING            48   /* > XA2_QUEUE_MAX */
 
 static int16_t s_ring[RING][XA2_BUF_SAMPLES * 2];
 static volatile int s_head, s_tail;   /* productor: APU; consumidor: s_thread */

@@ -39,7 +39,7 @@ void vglSwapBuffers(GLboolean has_commondialog);
 #include <psp2/kernel/sysmem.h>
 #include <psp2/kernel/threadmgr.h>
 #define VG_MSAA_NONE SCE_GXM_MULTISAMPLE_NONE
-#define VG_RT_FLIP_DEFAULT 1        /* hipótesis: vitaGL guarda los FBO de arriba abajo */
+#define VG_RT_FLIP_DEFAULT 0        /* consola 2026-10-21: con 1 el título y el perfil salían volteados */
 #define VG_VERTEX_SHADER   GL_CG_VERTEX_SHADER_EXT
 #define VG_FRAGMENT_SHADER GL_CG_FRAGMENT_SHADER_EXT
 #endif
@@ -85,7 +85,6 @@ typedef struct { uint32_t key, ninputs; uint8_t inputs[8]; GLuint vs; } VgVsp;
 static struct {
     int active, ysign, gpu_vsh;
     int gl_thread;   /* el de vglInit: vitaGL no admite GL desde otro */
-    int blit_ffp;    /* diagnóstico: blit con el fixed function de vitaGL */
     VgVsp vsp[VG_MAX_VSP];
     uint32_t nvsp;
     VgSurface surfaces[HW_MAX_SURFACES], *front, *largest;
@@ -460,29 +459,6 @@ static void vg_blit(GLuint tex, float x, float y, float w, float h, float fbw, f
     float q[6][4] = {{x0, y0, 0, 0}, {x1, y0, 1, 0}, {x0, y1, 0, 1},
                      {x1, y0, 1, 0}, {x1, y1, 1, 1}, {x0, y1, 0, 1}};
     int i;
-#if !defined(RESOT_HW_GLSL)
-    if (s_vg.blit_ffp) {   /* fixed function de vitaGL, sin shaders propios (diagnóstico) */
-        float pos[6][2], uv[6][2];
-        for (i = 0; i < 6; i++) { pos[i][0] = q[i][0]; pos[i][1] = q[i][1]; uv[i][0] = q[i][2]; uv[i][1] = q[i][3]; }
-        glUseProgram(0);
-        glMatrixMode(GL_PROJECTION); glLoadIdentity();
-        glMatrixMode(GL_MODELVIEW); glLoadIdentity();
-        glActiveTexture(GL_TEXTURE0);
-        glEnable(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-        glEnableClientState(GL_VERTEX_ARRAY);
-        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-        glVertexPointer(2, GL_FLOAT, 0, pos);
-        glTexCoordPointer(2, GL_FLOAT, 0, uv);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-        glDisableClientState(GL_VERTEX_ARRAY);
-        glDisable(GL_TEXTURE_2D);
-        return;
-    }
-#endif
     glUseProgram(s_vg.blit);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex);
@@ -507,16 +483,6 @@ void vgl_log_hook(const char *fmt, ...)
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
     va_end(ap);
-}
-
-/* Lo que de verdad va a pantalla: el callback de la cola de display recibe el búfer. */
-static volatile uint32_t s_disp_frames, s_disp_center, s_disp_bar;
-static void vg_display_cb(void *fb)
-{
-    const volatile uint32_t *p = (const volatile uint32_t *)fb;
-    s_disp_frames++;
-    s_disp_center = p[(VG_SCREEN_H / 2) * 960 + VG_SCREEN_W / 2];   /* stride 960 (VGL_ALIGN 64) */
-    s_disp_bar = p[(VG_SCREEN_H / 2) * 960 + 8];
 }
 
 void vgl_gxm_error_hook(const char *what, int code)
@@ -563,9 +529,6 @@ static int ng_init(const char *backend)
         fprintf(stderr, "[HW vita] vglInitExtended falló: rasterizador por software\n");
         return 0;
     }
-#if !defined(RESOT_HW_GLSL)
-    vglSetDisplayCallback(vg_display_cb);
-#endif
 #if !defined(RESOT_HW_GLSL)
     s_vg.gl_thread = sceKernelGetThreadId();
 #endif
@@ -1243,17 +1206,8 @@ static void ng_compose(void)
     glViewport(0, 0, VG_SCREEN_W, VG_SCREEN_H);
     glDisable(GL_SCISSOR_TEST); glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    /* ponytail: diagnóstico de la pantalla negra en consola (2026-10-21); quitar cuando se vea
-     * la imagen. Barras azul oscuro + cuadro rojo con glClear (sin shaders) y el blit alterna
-     * cada 5 s entre el shader CG y el fixed function de vitaGL. */
-    glClearColor(0, 0, 0.25f, 1);
+    glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
-    glEnable(GL_SCISSOR_TEST);
-    glScissor(0, VG_SCREEN_H - 32, 32, 32);
-    glClearColor(1, 0, 0, 1);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glDisable(GL_SCISSOR_TEST);
-    s_vg.blit_ffp = (GetTickCount() / 5000) & 1;
     if (s_vg.front) {
         /* la fila 0 de la superficie es la fila 0 del guest (arriba) en las dos convenciones */
         vg_blit(s_vg.front->tex, px, py, pw, ph, VG_SCREEN_W, VG_SCREEN_H);
@@ -1278,21 +1232,11 @@ static void ng_compose(void)
         vg_blit(s_vg.overlay, mx + rect[0] * mw / 640, py + rect[1] * ph / 480,
                 rect[2] * mw / 640, rect[3] * ph / 480, VG_SCREEN_W, VG_SCREEN_H);
     }
-    {   /* diagnóstico cada 5 s: qué se compuso */
+    {   /* cada 10 s, qué se compone (sin glReadPixels: para la GPU entera) */
         static DWORD last;
         DWORD now = GetTickCount();
-        if (now - last >= 2500) {
+        if (now - last >= 10000) {
             last = now;
-            uint8_t c[4] = {0}, r[4] = {0}, b[4] = {0};
-            glReadPixels(VG_SCREEN_W / 2, VG_SCREEN_H / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, c);
-            glReadPixels(8, VG_SCREEN_H - 8, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, r);
-            glReadPixels(8, VG_SCREEN_H / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, b);
-            fprintf(stderr, "[HW vita] compose (%s): centro %02X%02X%02X, esquina roja %02X%02X%02X, barra azul %02X%02X%02X\n",
-                    s_vg.blit_ffp ? "blit FFP" : "blit CG", c[0], c[1], c[2], r[0], r[1], r[2], b[0], b[1], b[2]);
-#if !defined(RESOT_HW_GLSL)
-            fprintf(stderr, "[HW vita] display: %u fotogramas en pantalla, centro 0x%08X, barra 0x%08X (ABGR)\n",
-                    (unsigned)s_disp_frames, (unsigned)s_disp_center, (unsigned)s_disp_bar);
-#endif
             fprintf(stderr, "[HW vita] compose: front %s %ux%u, vídeo %s, error GL 0x%X\n",
                     s_vg.front ? "sí" : "no", s_vg.front ? s_vg.front->w : 0, s_vg.front ? s_vg.front->h : 0,
                     xbox_FramebufferOverlayGet(&pixels, &w, &h, rect, &serial) ? "sí" : "no", glGetError());

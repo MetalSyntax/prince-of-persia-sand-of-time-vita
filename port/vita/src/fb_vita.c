@@ -154,6 +154,18 @@ static void overlay_latch(int buf)
         fprintf(stderr, "[FB] overlay de vídeo: %ux%u %s en 0x%08X -> %ux%u+%u+%u\n",
                 w, h, yuy2 ? "YUY2" : "UYVY", 0x80000000u | addr, ow, oh, ox, oy);
     s_ovl_active = 1;
+    if (s_hw_mode) {
+        /* Huella de ~200 muestras del cuadro YUY2: si Bink no escribió uno nuevo no se
+         * convierte ni se sube otra vez a la GPU (antes: 1 MB cada 16 ms). */
+        static uint32_t last_hash;
+        uint32_t hash = addr ^ (w << 20) ^ (h << 8) ^ pitch;
+        for (y = 0; y < h; y += 4) {
+            const volatile uint32_t *row = (const volatile uint32_t *)guest32(0x80000000u | (addr + y * pitch));
+            hash = hash * 31u + row[(y * 37u) % (w / 2 ? w / 2 : 1)];
+        }
+        if (hash == last_hash && s_ovl && s_ovl_w == w && s_ovl_h == h) return;
+        last_hash = hash;
+    }
     pthread_mutex_lock(&s_frame_lock);
     if (w != s_ovl_w || h != s_ovl_h || !s_ovl) {
         free(s_ovl);
@@ -240,10 +252,14 @@ void vita_gl_idle_tick(void)
     extern void nv2a_hw_idle_present(void);
     static uint32_t last;
     uint32_t now;
+    static uint32_t last_serial;
     if (!s_hw_mode) return;
     { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); now = (uint32_t)(ts.tv_sec * 1000u + ts.tv_nsec / 1000000); }
     if (now - last < 16) return;
+    /* con vídeo, solo si hay un cuadro nuevo (o cada 100 ms): cada compose sube y dibuja */
+    if (s_ovl_active && s_ovl_serial == last_serial && now - last < 100) return;
     last = now;
+    last_serial = s_ovl_serial;
     nv2a_hw_idle_present();
 }
 

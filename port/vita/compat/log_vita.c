@@ -28,6 +28,30 @@ static int s_after_mark;          /* lo último escrito fue un aviso "↑ xN" */
 static __thread char t_line[LMAX];
 static __thread int t_len;
 
+/* Como mucho TAG_LIMIT líneas por etiqueta ("[READ]", "[KERNEL]"...) entre dos
+ * vita_log_tick() (10 s): el resto se cuenta y se resume en un aviso. */
+#define TAGS 32
+#define TAG_LIMIT 40
+static struct { char tag[24]; unsigned shown, omitted; } s_tags[TAGS];
+
+static int over_limit(const char *line)
+{
+    const char *a = line, *b;
+    size_t n;
+    int i;
+    while (*a == ' ') a++;
+    if (*a != '[' || !(b = strchr(a, ']')) || (n = (size_t)(b - a + 1)) >= sizeof s_tags[0].tag)
+        return 0;   /* sin etiqueta: siempre se escribe */
+    for (i = 0; i < TAGS; i++) {
+        if (!s_tags[i].tag[0]) { memcpy(s_tags[i].tag, a, n); s_tags[i].tag[n] = 0; }
+        if (!strncmp(s_tags[i].tag, a, n) && !s_tags[i].tag[n]) break;
+    }
+    if (i == TAGS) return 0;
+    if (s_tags[i].shown < TAG_LIMIT) { s_tags[i].shown++; return 0; }
+    s_tags[i].omitted++;
+    return 1;
+}
+
 static const char *hist_back(unsigned back)   /* 1 = la última */
 {
     return s_hist[(s_nh - back) % HIST];
@@ -36,6 +60,7 @@ static const char *hist_back(unsigned back)   /* 1 = la última */
 static void emit(const char *line)
 {
     size_t n = strlen(line);
+    if (over_limit(line)) return;
     sceIoWrite(s_fd, line, n);
     sceIoWrite(s_fd, "\n", 1);
     memcpy(s_hist[s_nh % HIST], line, n + 1);
@@ -116,5 +141,14 @@ void vita_log_tick(void)
     if (s_fd < 0) return;
     pthread_mutex_lock(&s_lock);
     flush_repeat();
+    for (int i = 0; i < TAGS && s_tags[i].tag[0]; i++) {
+        if (s_tags[i].omitted) {
+            char mark[96];
+            int n = snprintf(mark, sizeof mark, "  \xE2\x86\x91 %s +%u omitidas (l\xC3\xADmite %d cada 10 s)\n",
+                             s_tags[i].tag, s_tags[i].omitted, TAG_LIMIT);
+            sceIoWrite(s_fd, mark, n);
+        }
+        s_tags[i].shown = s_tags[i].omitted = 0;
+    }
     pthread_mutex_unlock(&s_lock);
 }
