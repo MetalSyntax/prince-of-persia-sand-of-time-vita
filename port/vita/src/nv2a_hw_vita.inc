@@ -85,6 +85,7 @@ typedef struct { uint32_t key, ninputs; uint8_t inputs[8]; GLuint vs; } VgVsp;
 static struct {
     int active, ysign, gpu_vsh;
     int gl_thread;   /* el de vglInit: vitaGL no admite GL desde otro */
+    int blit_ffp;    /* diagnóstico: blit con el fixed function de vitaGL */
     VgVsp vsp[VG_MAX_VSP];
     uint32_t nvsp;
     VgSurface surfaces[HW_MAX_SURFACES], *front, *largest;
@@ -459,6 +460,29 @@ static void vg_blit(GLuint tex, float x, float y, float w, float h, float fbw, f
     float q[6][4] = {{x0, y0, 0, 0}, {x1, y0, 1, 0}, {x0, y1, 0, 1},
                      {x1, y0, 1, 0}, {x1, y1, 1, 1}, {x0, y1, 0, 1}};
     int i;
+#if !defined(RESOT_HW_GLSL)
+    if (s_vg.blit_ffp) {   /* fixed function de vitaGL, sin shaders propios (diagnóstico) */
+        float pos[6][2], uv[6][2];
+        for (i = 0; i < 6; i++) { pos[i][0] = q[i][0]; pos[i][1] = q[i][1]; uv[i][0] = q[i][2]; uv[i][1] = q[i][3]; }
+        glUseProgram(0);
+        glMatrixMode(GL_PROJECTION); glLoadIdentity();
+        glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+        glActiveTexture(GL_TEXTURE0);
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        glVertexPointer(2, GL_FLOAT, 0, pos);
+        glTexCoordPointer(2, GL_FLOAT, 0, uv);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+        glDisableClientState(GL_VERTEX_ARRAY);
+        glDisable(GL_TEXTURE_2D);
+        return;
+    }
+#endif
     glUseProgram(s_vg.blit);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex);
@@ -1186,8 +1210,17 @@ static void ng_compose(void)
     glViewport(0, 0, VG_SCREEN_W, VG_SCREEN_H);
     glDisable(GL_SCISSOR_TEST); glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glClearColor(0, 0, 0, 1);
+    /* ponytail: diagnóstico de la pantalla negra en consola (2026-10-21); quitar cuando se vea
+     * la imagen. Barras azul oscuro + cuadro rojo con glClear (sin shaders) y el blit alterna
+     * cada 5 s entre el shader CG y el fixed function de vitaGL. */
+    glClearColor(0, 0, 0.25f, 1);
     glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(0, VG_SCREEN_H - 32, 32, 32);
+    glClearColor(1, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+    s_vg.blit_ffp = (GetTickCount() / 5000) & 1;
     if (s_vg.front) {
         /* la fila 0 de la superficie es la fila 0 del guest (arriba) en las dos convenciones */
         vg_blit(s_vg.front->tex, px, py, pw, ph, VG_SCREEN_W, VG_SCREEN_H);
@@ -1215,11 +1248,14 @@ static void ng_compose(void)
     {   /* diagnóstico cada 5 s: qué se compuso */
         static DWORD last;
         DWORD now = GetTickCount();
-        if (now - last >= 5000) {
+        if (now - last >= 2500) {
             last = now;
-            uint8_t c[4] = {0};
+            uint8_t c[4] = {0}, r[4] = {0}, b[4] = {0};
             glReadPixels(VG_SCREEN_W / 2, VG_SCREEN_H / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, c);
-            fprintf(stderr, "[HW vita] compose: centro %02X%02X%02X\n", c[0], c[1], c[2]);
+            glReadPixels(8, VG_SCREEN_H - 8, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, r);
+            glReadPixels(8, VG_SCREEN_H / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, b);
+            fprintf(stderr, "[HW vita] compose (%s): centro %02X%02X%02X, esquina roja %02X%02X%02X, barra azul %02X%02X%02X\n",
+                    s_vg.blit_ffp ? "blit FFP" : "blit CG", c[0], c[1], c[2], r[0], r[1], r[2], b[0], b[1], b[2]);
             fprintf(stderr, "[HW vita] compose: front %s %ux%u, vídeo %s, error GL 0x%X\n",
                     s_vg.front ? "sí" : "no", s_vg.front ? s_vg.front->w : 0, s_vg.front ? s_vg.front->h : 0,
                     xbox_FramebufferOverlayGet(&pixels, &w, &h, rect, &serial) ? "sí" : "no", glGetError());

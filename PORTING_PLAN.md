@@ -318,6 +318,11 @@ Fases concretas:
       - `vglUseCachedMem(GL_TRUE)` (como Advena, N.O.V.A 2, GT Racing): subidas de vídeo/texturas más rápidas.
       Revisión de los ports de `/Volumes/TOSHIBA EXT/PSVITA Develop`: todos llaman a GL desde un único hilo;
       relojes 444/222/222/166 y ATTRIBUTE2=12 como aquí; `-ffast-math` no aplica al C recompilado (semántica x87).
+- [ ] (2026-10-21) **Quinta prueba** (`logs/log_005.log`): sin crash; el juego avanza (vídeos ubisoft/bink/intro,
+      flips de hasta 110 draws) pero la pantalla sigue negra con el compose ya en el hilo de GL. El vitaGL
+      vendorizado ya es el árbol de PoP Classic (`PSVITA Develop/Prince of Persia /vendor/vitaGL`) con añadidos
+      de seguridad en gxm.c/tests.c/vgl.c/caché: no explica el negro. Prueba de diagnóstico: barras azules y
+      cuadro rojo con glClear, blit alterno CG/FFP cada 5 s y lecturas de píxel en el log.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.
