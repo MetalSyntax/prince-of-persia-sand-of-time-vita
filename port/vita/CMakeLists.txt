@@ -189,14 +189,22 @@ add_library(vitaGL_lib STATIC IMPORTED)
 set_target_properties(vitaGL_lib PROPERTIES IMPORTED_LOCATION "${VITAGL_DIR}/libvitaGL.a")
 add_dependencies(${PROJECT_NAME} vitaGL_vendored)
 set_property(SOURCE ${VZ}/rt/nv2a_pb_exec.c APPEND PROPERTY INCLUDE_DIRECTORIES "${VITAGL_DIR}/source")
-target_sources(${PROJECT_NAME} PRIVATE compat/threads_vita.c compat/log_vita.c src/movie_vita.c)   # solo Vita: [THR], afinidad, log x32, vídeos MP4
+# FFmpeg mínimo con Bink (tools/build_ffmpeg_bink.sh, que build.sh ejecuta antes): los vídeos
+# originales se decodifican en ARM en lugar de con el Bink x86 recompilado del juego.
+set(FFMPEG_BINK "${PORT_ROOT}/build/ffmpeg-bink")
+if(NOT EXISTS "${FFMPEG_BINK}/lib/libavcodec.a")
+  message(FATAL_ERROR "Falta ${FFMPEG_BINK}: ejecutar port/vita/tools/build_ffmpeg_bink.sh (build.sh lo hace)")
+endif()
+set_property(SOURCE src/movie_vita.c APPEND PROPERTY INCLUDE_DIRECTORIES "${FFMPEG_BINK}/include")
+target_link_libraries(${PROJECT_NAME} "${FFMPEG_BINK}/lib/libavformat.a" "${FFMPEG_BINK}/lib/libavcodec.a" "${FFMPEG_BINK}/lib/libavutil.a" z)
+target_sources(${PROJECT_NAME} PRIVATE compat/threads_vita.c compat/log_vita.c src/movie_vita.c)   # solo Vita: [THR], afinidad, log x32, vídeos Bink por FFmpeg
 target_link_libraries(${PROJECT_NAME}
   -Wl,--whole-archive pthread -Wl,--no-whole-archive
   -Wl,--pic-veneer -Wl,--wrap=recomp_lookup -Wl,--wrap=pthread_create -Wl,--wrap=CreateThread
   SceDisplay_stub SceSysmem_stub ScePower_stub
   vitaGL_lib vitashark SceShaccCgExt taihen_stub SceShaccCg_stub mathneon
   SceKernelThreadMgr_stub SceIofilemgr_stub SceRtc_stub SceAppUtil_stub SceTouch_stub SceAudio_stub SceAppMgr_stub SceCtrl_stub
-  SceGxm_stub SceKernelDmacMgr_stub SceCommonDialog_stub SceDisplay_stub SceAvPlayer_stub SceSysmodule_stub
+  SceGxm_stub SceKernelDmacMgr_stub SceCommonDialog_stub SceDisplay_stub
   m stdc++)  # stdc++ después de vitaGL: es C++ por dentro
 
 vita_create_self(eboot.bin ${PROJECT_NAME} UNSAFE NOASLR)

@@ -356,6 +356,14 @@ Fases concretas:
       (640x480, H.264 High 4.0 + AAC; ubisoft: 2 MB → 472 KB). `vitaize.py` tenía dos claves `kernel_path.c`
       (la segunda pisaba la primera): fusionadas. Log con segundos desde el arranque. Sin `DRAW_SPEEDHACK`:
       haría que la GPU leyera el búfer de vértices de la CPU (sin mapear y reescrito en cada draw).
+- [ ] (2026-10-21) **Vídeos Bink originales con FFmpeg** (el usuario no quiere archivos convertidos; el paso MP4
+      se retiró): `tools/build_ffmpeg_bink.sh` compila FFmpeg 7.1.1 (SHA-256 fijado) solo con demuxer bink y
+      decodificadores bink/binkaudio_dct/rdft, para la Vita (softfp, NEON, `build/ffmpeg-bink`, 1,5 MB).
+      `src/movie_vita.c` decodifica `VIDEO/X.int` en un hilo propio (4 cuadros y 1 s de audio por delante),
+      cuadros por pts con descarte si va tarde, YUV420P a vitaGL (`VGL_YUV420P_BT601`), audio float→s16 por
+      un puerto VOICE. Mismos enganches que antes (rutina de estado de Bink y `kernel_path.c`). Coste medido
+      en un M4: 0,27–0,30 ms/cuadro con 1 hilo (est. 11–18 ms en el A9). log_009 (build anterior): en el 3D
+      1,4–2,6 fps con ~230 draws y 120 texturas por fotograma.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

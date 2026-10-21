@@ -11,6 +11,7 @@ if [ "$1" = "--hosttest" ]; then
 fi
 export VITASDK="${VITASDK:-$HOME/vitasdk}"
 export PATH="$VITASDK/bin:$PATH"
+port/vita/tools/build_ffmpeg_bink.sh   # FFmpeg mínimo con Bink (una vez)
 cmake -S port/vita -B build/vita-port
 make -C build/vita-port -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
 # `psvita-toolkit analyze` busca el ELF con símbolos como build_dir/*.elf

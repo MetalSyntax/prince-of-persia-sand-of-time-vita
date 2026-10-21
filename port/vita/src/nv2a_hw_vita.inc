@@ -85,7 +85,7 @@ typedef struct { uint32_t key, ninputs; uint8_t inputs[8]; GLuint vs; } VgVsp;
 static struct {
     int active, ysign, gpu_vsh;
     int gl_thread;   /* el de vglInit: vitaGL no admite GL desde otro */
-    GLuint movie;    /* cuadro NV12 del MP4 (movie_vita.c) */
+    GLuint movie;    /* cuadro YUV420P del vídeo Bink (movie_vita.c, FFmpeg) */
     int movie_ok;
     VgVsp vsp[VG_MAX_VSP];
     uint32_t nvsp;
@@ -476,7 +476,7 @@ static void vg_blit(GLuint tex, float x, float y, float w, float h, float fbw, f
 
 #if !defined(RESOT_HW_GLSL)
 int vita_movie_active(void);
-int vita_movie_frame(const void **nv12, unsigned *w, unsigned *h);
+int vita_movie_frame(const void **yuv, unsigned *w, unsigned *h);
 static void ng_compose(void);
 static void ng_present(int sync);
 
@@ -541,13 +541,7 @@ static int ng_init(const char *backend)
     vglUseCachedMem(GL_TRUE);
 #endif
     fprintf(stderr, "[HW vita] vglInitExtended (deja 32 MB de RAM al runtime)\n");
-#if defined(RESOT_HW_GLSL)
     if (!vglInitExtended(0, VG_SCREEN_W, VG_SCREEN_H, 32 * 1024 * 1024, VG_MSAA_NONE)) {
-#else
-    /* 8 MB de CDRAM fuera de vitaGL: los cuadros del decodificador de vídeo (movie_vita.c) */
-    if (!vglInitWithCustomThreshold(0, VG_SCREEN_W, VG_SCREEN_H, 32 * 1024 * 1024, 8 * 1024 * 1024, 0,
-                                    0x8C6000 /* SCE_KERNEL_MAX_MAIN_CDIALOG_MEM_SIZE, mem_utils.h */, VG_MSAA_NONE)) {
-#endif
         fprintf(stderr, "[HW vita] vglInitExtended falló: rasterizador por software\n");
         return 0;
     }
@@ -1231,7 +1225,7 @@ static void ng_compose(void)
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
 #if !defined(RESOT_HW_GLSL)
-    if (vita_movie_active()) {   /* MP4 en lugar del Bink: ocupa el área 4:3 */
+    if (vita_movie_active()) {   /* vídeo Bink por FFmpeg (movie_vita.c): ocupa el área 4:3 */
         const void *yuv;
         unsigned mw, mh;
         float aw = ph * (4.0f / 3.0f);
@@ -1245,7 +1239,7 @@ static void ng_compose(void)
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
             }
             glBindTexture(GL_TEXTURE_2D, s_vg.movie);
-            glCompressedTexImage2D(GL_TEXTURE_2D, 0, VGL_YUV420P_NV12_BT601, (GLsizei)mw, (GLsizei)mh, 0,
+            glCompressedTexImage2D(GL_TEXTURE_2D, 0, VGL_YUV420P_BT601, (GLsizei)mw, (GLsizei)mh, 0,
                                    (GLsizei)(mw * mh * 3 / 2), yuv);
             s_vg.movie_ok = 1;
         }

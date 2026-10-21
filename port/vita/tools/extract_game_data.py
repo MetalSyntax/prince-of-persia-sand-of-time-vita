@@ -3,7 +3,7 @@
 el port de PS Vita lee (como scripts/extract-game-data.py de nfsmw-vita).
 
 Uso:
-    python3 -I extract_game_data.py DISCO DESTINO [--all-languages] [--movies]
+    python3 -I extract_game_data.py DISCO DESTINO [--all-languages]
 
 DISCO es la XISO NTSC extraída (default.xbe con el SHA-256 de rePOP).
 DESTINO es una carpeta local (copiarla entera a ux0:data/pop-sot/) o
@@ -20,18 +20,11 @@ Fuera (2,4 GB -> ~1,6 GB):
     hipótesis por analogía (aún no se llegó a esas cinemáticas):
     --all-languages lo copia todo si falta alguna.
 
---movies convierte además los vídeos Bink (VIDEO/*.int) a movies/X.mp4 (H.264 +
-AAC, 640x480) con ffmpeg: el port los reproduce con el decodificador por
-hardware de la Vita en lugar de decodificar Bink en la CPU (src/movie_vita.c).
-Los MP4 se guardan en converted/movies/ (fuera de git) y se reutilizan.
-
 Solo lee el disco; no ejecuta nada de él.
 """
 import ftplib
 import hashlib
 import re
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -57,30 +50,6 @@ def self_check():
     assert wanted("VIDEO/Loading3.int") and wanted("VIDEO/VIS_111.int")   # no son idiomas
     assert not wanted("POP2/default.xbe") and not wanted("update.xbe") and not wanted("VIDEO/._x.int")
     assert wanted("VIDEO/CINE_9012.INT", all_languages=True)
-
-
-def convert_movie(src, out):
-    """VIDEO/X.int -> movies/X.mp4 como lo dibuja el juego: 640 de ancho, centrado en 480."""
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_name(out.stem + ".part.mp4")
-    subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", str(src),
-                    "-map", "0:v:0", "-map", "0:a:0?",
-                    "-c:v", "libx264", "-profile:v", "high", "-level", "4.0", "-crf", "22",
-                    "-pix_fmt", "yuv420p", "-vf", "pad=640:480:0:(480-ih)/2",
-                    "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
-                    "-movflags", "+faststart", str(tmp)], check=True)
-    tmp.replace(out)
-
-
-def movies(todo, cache):
-    """(ruta en la Vita, archivo local) de los MP4 de los vídeos que se copian."""
-    for rel, p in todo:
-        if rel.upper().startswith("VIDEO/") and p.suffix.lower() == ".int":
-            out = cache / (p.stem + ".mp4")
-            if not out.is_file():
-                print("  convirtiendo %s" % rel, flush=True)
-                convert_movie(p, out)
-            yield "movies/" + out.name, out
 
 
 def files(disc, all_languages):
@@ -163,10 +132,6 @@ def main():
         sys.exit("default.xbe no es el NTSC que usa el port (SHA-256 %s, se espera %s)" % (digest, XBE_SHA256))
     dest = FtpDest(dest_arg) if dest_arg.startswith("ftp://") else LocalDest(dest_arg)
     todo = list(files(disc, all_languages))
-    if "--movies" in sys.argv:
-        if not shutil.which("ffmpeg"):
-            sys.exit("--movies necesita ffmpeg (brew install ffmpeg)")
-        todo += list(movies(todo, Path("converted/movies")))
     total = sum(p.stat().st_size for _, p in todo)
     done = 0
     print("%d archivos, %.0f MB" % (len(todo), total / 2**20), flush=True)
