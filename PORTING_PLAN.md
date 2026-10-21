@@ -289,6 +289,13 @@ Fases concretas:
       (bonus con XBE propio), update/dashupdate.xbe y variantes de idioma 1..4 (el runtime contesta inglés y
       los logs abren soundx0/poplogo0/pop_in0/pop_out0). *Hipótesis:* CINE_9010 es la cinemática inglesa
       (no se ha llegado a ella); `--all-languages` si faltara. Comprueba el SHA-256 del XBE.
+- [ ] (2026-10-21) **Primera prueba en consola con datos reducidos** (`logs/log_001.log`): 268 MB libres al
+      arrancar (Vita3K: 324), 136 MB tras el layout, heap 11 MB: memoria OK. Pantalla negra sin sonido a
+      30 fps sin crash: el juego se para tras cargar soundx0.big y el primer clear de la GPU; el ejecutor NV2A
+      con "0 ms executing" (Vita3K: 12 s de 15) e `[IRQL] ... held by tid 1004 for >100 ms`. *Hipótesis:*
+      hambre de CPU (la Vita no reparte tiempo entre hilos de igual prioridad en un núcleo). Siguiente prueba:
+      `compat/threads_vita.c` registra todos los hilos (`[THR]` cada 10 s: prioridad, núcleo, máscara, % CPU)
+      y les da afinidad a los 3 núcleos (`RECOMP_VITA_AFFINITY=0` lo quita).
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

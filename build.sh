@@ -24,7 +24,7 @@ if [ "$1" = "--vita3k" ]; then
     # cierre amable 5 s (con SIGTERM Vita3K "se cierra inesperadamente"); si un diálogo lo bloquea, -9
     osascript -e 'quit app "Vita3K"' >/dev/null 2>&1 & q=$!
     for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -x Vita3K >/dev/null || break; sleep 0.5; done
-    kill "$q" 2>/dev/null; pkill -9 -x Vita3K; while pgrep -x Vita3K >/dev/null; do sleep 0.5; done
+    kill "$q" 2>/dev/null || true; pkill -9 -x Vita3K || true; while pgrep -x Vita3K >/dev/null; do sleep 0.5; done
     open -a Vita3K --args -r "$TID"
     echo "Vita3K abierto con $TID; logs en $V3K/data/pop-sot/logs/"
 fi

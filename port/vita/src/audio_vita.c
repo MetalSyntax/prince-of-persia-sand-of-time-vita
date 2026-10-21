@@ -27,10 +27,15 @@ static volatile int s_run;
 
 static int queued(void) { return (s_head - s_tail + RING) % RING; }
 
+extern void vita_thread_register(void *entry);
+
 static int out_thread(SceSize args, void *argp)
 {
     static const int16_t silence[XA2_BUF_SAMPLES * 2];
     (void)args; (void)argp;
+#ifdef __vita__
+    vita_thread_register((void *)out_thread);
+#endif
     while (s_run) {
         if (queued()) {
             sceAudioOutOutput(s_port, s_ring[s_tail]);   /* bloquea hasta consumir la trama */

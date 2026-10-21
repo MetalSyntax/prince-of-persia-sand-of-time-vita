@@ -56,6 +56,8 @@ extern void vita_fb_init(void);
 extern void vita_fb_message(uint32_t rgb);
 extern void vita_fb_pump(void);
 extern void vita_input_init(void);
+extern void vita_thread_register(void *entry);
+extern void vita_threads_log(unsigned interval_ms);
 
 static volatile int s_game_running;
 
@@ -245,6 +247,9 @@ int main(void)
     sceIoMkdir(DATA_DIR "/logs", 0777);
     sceIoMkdir(DATA_DIR "/saves", 0777);
     open_log();
+#ifdef __vita__
+    vita_thread_register((void *)main);
+#endif
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);   /* ponytail: por línea, para no perder el final al crashear */
     chdir(DATA_DIR);
@@ -294,7 +299,12 @@ int main(void)
 
     for (unsigned tick = 1;; tick++) {
         vita_fb_pump();   /* muestra el último frame y atiende el mando */
-        if (tick % 600 == 0) log_free_memory("cada 10 s");
+        if (tick % 600 == 0) {
+            log_free_memory("cada 10 s");
+#ifdef __vita__
+            vita_threads_log(10000);
+#endif
+        }
         if (!s_game_running) {
             fflush(stdout);
             fflush(stderr);

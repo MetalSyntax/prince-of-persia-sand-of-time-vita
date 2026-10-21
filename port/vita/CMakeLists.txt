@@ -185,9 +185,10 @@ add_library(vitaGL_lib STATIC IMPORTED)
 set_target_properties(vitaGL_lib PROPERTIES IMPORTED_LOCATION "${VITAGL_DIR}/libvitaGL.a")
 add_dependencies(${PROJECT_NAME} vitaGL_vendored)
 set_property(SOURCE ${VZ}/rt/nv2a_pb_exec.c APPEND PROPERTY INCLUDE_DIRECTORIES "${VITAGL_DIR}/source")
+target_sources(${PROJECT_NAME} PRIVATE compat/threads_vita.c)   # solo Vita: [THR] y afinidad
 target_link_libraries(${PROJECT_NAME}
   -Wl,--whole-archive pthread -Wl,--no-whole-archive
-  -Wl,--pic-veneer -Wl,--wrap=recomp_lookup
+  -Wl,--pic-veneer -Wl,--wrap=recomp_lookup -Wl,--wrap=pthread_create -Wl,--wrap=CreateThread
   SceDisplay_stub SceSysmem_stub ScePower_stub
   vitaGL_lib vitashark SceShaccCgExt taihen_stub SceShaccCg_stub mathneon
   SceKernelThreadMgr_stub SceIofilemgr_stub SceRtc_stub SceAppUtil_stub SceTouch_stub SceAudio_stub SceAppMgr_stub SceCtrl_stub
