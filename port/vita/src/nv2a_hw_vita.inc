@@ -36,6 +36,7 @@ void vglSwapBuffers(GLboolean has_commondialog);
 #define VG_FRAGMENT_SHADER GL_FRAGMENT_SHADER
 #else
 #include <vitaGL.h>
+#include <psp2/kernel/sysmem.h>
 #define VG_MSAA_NONE SCE_GXM_MULTISAMPLE_NONE
 #define VG_RT_FLIP_DEFAULT 1        /* hipótesis: vitaGL guarda los FBO de arriba abajo */
 #define VG_VERTEX_SHADER   GL_CG_VERTEX_SHADER_EXT
@@ -475,6 +476,25 @@ static int ng_init(const char *backend)
     const char *flip = getenv("RECOMP_VITA_RT_FLIP");
     int f;
     (void)backend;
+    /* Los vértices transformados por la CPU (24 MB): solo los lee la CPU (vitaGL los
+     * copia en cada draw), así que van en un bloque propio con caché, pedido antes que
+     * vitaGL para que su reparto los cuente. Ni malloc (heap de newlib, 48 MB) ni
+     * vglAlloc(VGL_MEM_RAM): el mspace de vitaGL no da 24 MB de una vez aunque tenga
+     * 66 MB libres (log_003 de consola, 2026-10-21). */
+#if defined(RESOT_HW_GLSL)
+    s_hw.verts = (HwVertex *)malloc(sizeof(HwVertex) * HW_MAX_VERTS);
+#else
+    {
+        void *base = NULL;
+        SceUID blk = sceKernelAllocMemBlock("pop-hw-verts", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW,
+                                            (sizeof(HwVertex) * HW_MAX_VERTS + 0xFFFu) & ~0xFFFu, NULL);
+        s_hw.verts = blk >= 0 && sceKernelGetMemBlockBase(blk, &base) >= 0 ? (HwVertex *)base : NULL;
+    }
+#endif
+    if (!s_hw.verts) {
+        fprintf(stderr, "[HW vita] sin memoria para %u vértices: rasterizador por software\n", (unsigned)HW_MAX_VERTS);
+        return 0;
+    }
     /* 32 MB de RAM quedan para el runtime (pilas de los hilos que el juego crea
      * después, archivos); vitaGL toma el resto de la memoria libre para su pool. */
     fprintf(stderr, "[HW vita] vglInitExtended (deja 32 MB de RAM al runtime)\n");
@@ -496,18 +516,6 @@ static int ng_init(const char *backend)
         glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    /* 25 MB del pool RAM de vitaGL (vglMalloc probaría newlib primero): en el heap de newlib
-     * el malloc fallaba y todo caía en silencio al rasterizador por software. */
-#if defined(RESOT_HW_GLSL)
-    s_hw.verts = (HwVertex *)malloc(sizeof(HwVertex) * HW_MAX_VERTS);
-#else
-    s_hw.verts = (HwVertex *)vglAlloc(sizeof(HwVertex) * HW_MAX_VERTS, VGL_MEM_RAM);
-#endif
-    if (!s_hw.verts) {
-        fprintf(stderr, "[HW vita] sin memoria para %u vértices: rasterizador por software\n", (unsigned)HW_MAX_VERTS);
-        VG_GL_LEAVE();
-        return 0;
-    }
     s_hw.cpu_vsh = 1;
     s_hw.cull_face = 0x405; s_hw.front_face = 0x900;
     s_vg.active = 1;

@@ -302,6 +302,11 @@ Fases concretas:
       en el rasterizador por software. En Vita3K ese mismo fotograma (24 quads de pantalla completa, 1,5 M píxeles)
       tardó 12,4 s en un M4: en el A9, minutos. Arreglo: `RECOMP_HW=1` (vitaGL) por defecto; vitaGL deja 32 MB de
       RAM al runtime (antes 16). Vita3K: `RECOMP_HW=0` en env.txt. Pendiente: tercera prueba en consola.
+- [ ] (2026-10-21) **Tercera prueba en consola** (`logs/log_003.log`): vitaGL arranca, pero
+      `vglAlloc(24 MB, VGL_MEM_RAM)` de los vértices falla con 66 MB en el pool (el mspace de sceClib no da
+      ese bloque) y se vuelve al rasterizador por software, con vitaGL ya dueño de toda la CDRAM y la phycont.
+      Arreglo: los vértices (solo CPU) en un memblock USER_RW propio, pedido antes de `vglInitExtended`.
+      Pendiente: cuarta prueba.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.
