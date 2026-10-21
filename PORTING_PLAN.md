@@ -323,6 +323,13 @@ Fases concretas:
       vendorizado ya es el árbol de PoP Classic (`PSVITA Develop/Prince of Persia /vendor/vitaGL`) con añadidos
       de seguridad en gxm.c/tests.c/vgl.c/caché: no explica el negro. Prueba de diagnóstico: barras azules y
       cuadro rojo con glClear, blit alterno CG/FFP cada 5 s y lecturas de píxel en el log.
+- [ ] (2026-10-21) **Sexta/séptima prueba** (`log_006`, `log_007`): ni el glClear de diagnóstico llega. Con
+      `vglSetDisplayCallback`: ~60 fotogramas/s entregados a la pantalla, sin errores de vitaGL/GXM, pero el
+      búfer mostrado es 0x00000000 (alfa incluido): la GPU no escribe en los búferes de pantalla. Prueba aislada:
+      `vgltest.vpk` (solo vglInit + glClear rojo/verde con el mismo libvitaGL.a), log en `ux0:data/vgltest.log`.
+- [x] (2026-10-21) **Log comprimido** (`compat/log_vita.c`): stdout/stderr por una sola salida sin búfer,
+      línea entera por hilo (sin fragmentos mezclados) y repeticiones de línea o bloque de hasta 8 líneas como
+      `↑ xN` (`+N` si continúa un aviso anterior). Probado en el Mac con un sceIoWrite falso.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

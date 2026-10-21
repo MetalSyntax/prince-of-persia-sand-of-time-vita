@@ -58,6 +58,8 @@ extern void vita_fb_pump(void);
 extern void vita_input_init(void);
 extern void vita_thread_register(void *entry);
 extern void vita_threads_log(unsigned interval_ms);
+extern void vita_log_install(const char *path);
+extern void vita_log_tick(void);
 
 static volatile int s_game_running;
 
@@ -79,6 +81,9 @@ static void open_log(void)
     if ((f = fopen(path, "w")) != NULL) fclose(f);
     freopen(path, "a", stderr);
     freopen(path, "a", stdout);
+#ifdef __vita__
+    vita_log_install(path);   /* una sola salida, líneas enteras por hilo y repeticiones como xN */
+#endif
 }
 
 static void fail(const char *message)
@@ -304,6 +309,7 @@ int main(void)
             log_free_memory("cada 10 s");
 #ifdef __vita__
             vita_threads_log(10000);
+            vita_log_tick();
 #endif
         }
         if (!s_game_running) {
