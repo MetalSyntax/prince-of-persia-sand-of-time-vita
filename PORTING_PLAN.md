@@ -330,6 +330,12 @@ Fases concretas:
 - [x] (2026-10-21) **Log comprimido** (`compat/log_vita.c`): stdout/stderr por una sola salida sin búfer,
       línea entera por hilo (sin fragmentos mezclados) y repeticiones de línea o bloque de hasta 8 líneas como
       `↑ xN` (`+N` si continúa un aviso anterior). Probado en el Mac con un sceIoWrite falso.
+- [ ] (2026-10-21) **Causa del negro: ABI de vitaGL.** `vgltest.vpk` en consola: `vglInitExtended=1`, 1200
+      fotogramas entregados, todos 0x00000000 → vitaGL mismo, no el juego. VitaSDK compila en **softfp**
+      (`gcc -Q --help=target`: `-mfloat-abi=softfp`; `readelf -A` sin `Tag_ABI_VFP_args`), pero vitaGL se
+      compilaba sin `SOFTFP_ABI=1`: sin `HAVE_SOFTFP_ABI` no envuelve `sceGxmSetViewport` (floats en s0–s5)
+      y el viewport recibe basura: todo fuera de pantalla, sin errores. PoP Classic/Zenonia usan `SOFTFP_ABI=1`.
+      Arreglo: `SOFTFP_ABI=1` en el BUILD_COMMAND de vitaGL. Pendiente: confirmar con vgltest y el juego.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

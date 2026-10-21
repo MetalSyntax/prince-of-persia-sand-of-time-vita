@@ -172,14 +172,18 @@ if(HOSTTEST)
   return()
 endif()
 # vitaGL vendorizado (vendor/vitaGL/VENDORED.md, el mismo árbol que Skater Nation):
-# ABI hard-float de VitaSDK, sin logs de depuración y con caché de shaders CG
-# compilados en ux0:data (el generador de combiners crea decenas por escena).
+# SOFTFP_ABI=1 obligatorio: VitaSDK compila en softfp (gcc -Q: -mfloat-abi=softfp) y
+# las funciones de Sony con float (sceGxmSetViewport) los esperan en s0-s5; sin él
+# vitaGL no envuelve el viewport y todo se dibuja fuera de pantalla, sin error
+# (consola 2026-10-21: negro absoluto, también en una prueba mínima de glClear;
+# PoP Classic y Zenonia lo usan). Además: sin logs de depuración, caché de shaders
+# CG en ux0:data (el generador de combiners crea decenas por escena), sin splash.
 set(VITAGL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/vitaGL")
 include(ExternalProject)
 ExternalProject_Add(vitaGL_vendored
   SOURCE_DIR "${VITAGL_DIR}" BUILD_IN_SOURCE 1
   CONFIGURE_COMMAND "" INSTALL_COMMAND ""
-  BUILD_COMMAND make NO_DEBUG=1 HAVE_SHADER_CACHE=1 NO_SPLASHSCREEN=1 LOG_ERRORS=1
+  BUILD_COMMAND make SOFTFP_ABI=1 NO_DEBUG=1 HAVE_SHADER_CACHE=1 NO_SPLASHSCREEN=1 LOG_ERRORS=1
   BUILD_BYPRODUCTS "${VITAGL_DIR}/libvitaGL.a")
 add_library(vitaGL_lib STATIC IMPORTED)
 set_target_properties(vitaGL_lib PROPERTIES IMPORTED_LOCATION "${VITAGL_DIR}/libvitaGL.a")
