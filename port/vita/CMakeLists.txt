@@ -98,7 +98,7 @@ set(RUNTIME_SOURCES
   # video/fb_present.c no: su ventana es Win32/SDL; src/fb_vita.c la sustituye.
 
 set(HOST_SOURCES
-  src/main_vita.c src/fb_vita.c src/input_vita.c src/audio_vita.c compat/vvm.c compat/posix_vita.c
+  src/main_vita.c src/fb_vita.c src/input_vita.c src/audio_vita.c compat/vvm.c compat/posix_vita.c compat/dispatch_cache_vita.c
   compat/mmio_vita.c
   ${REPOP}/port/android/src/options_android.c
   ${REPOP}/port/android/src/host_files.c
@@ -168,7 +168,7 @@ if(HOSTTEST)
   # GL de Mesa (llvmpipe) en lugar de vitaGL; shaders en GLSL (nv2a_hw_vita.inc)
   set_property(SOURCE ${VZ}/rt/nv2a_pb_exec.c APPEND PROPERTY COMPILE_DEFINITIONS RESOT_HW_GLSL=1)
   target_sources(${PROJECT_NAME} PRIVATE hosttest/vitagl_fake.c)
-  target_link_libraries(${PROJECT_NAME} SDL2 EGL OpenGL pthread m)
+  target_link_libraries(${PROJECT_NAME} -Wl,--wrap=recomp_lookup SDL2 EGL OpenGL pthread m)
   return()
 endif()
 # vitaGL vendorizado (vendor/vitaGL/VENDORED.md, el mismo árbol que Skater Nation):
@@ -187,7 +187,7 @@ add_dependencies(${PROJECT_NAME} vitaGL_vendored)
 set_property(SOURCE ${VZ}/rt/nv2a_pb_exec.c APPEND PROPERTY INCLUDE_DIRECTORIES "${VITAGL_DIR}/source")
 target_link_libraries(${PROJECT_NAME}
   -Wl,--whole-archive pthread -Wl,--no-whole-archive
-  -Wl,--pic-veneer
+  -Wl,--pic-veneer -Wl,--wrap=recomp_lookup
   SceDisplay_stub SceSysmem_stub ScePower_stub
   vitaGL_lib vitashark SceShaccCgExt taihen_stub SceShaccCg_stub mathneon
   SceKernelThreadMgr_stub SceIofilemgr_stub SceRtc_stub SceAppUtil_stub SceTouch_stub SceAudio_stub SceAppMgr_stub SceCtrl_stub

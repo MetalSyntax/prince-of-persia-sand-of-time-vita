@@ -275,6 +275,15 @@ Fases concretas:
       commit y con el del VitaSDK. Los vídeos se veían porque vitaGL fallaba y quedaba el software. Arreglo:
       `RECOMP_HW=0` por defecto (main_vita.c); vitaGL con `RECOMP_HW=1` en `env.txt`. Evidencia: log_025 +
       captura con el logo de Bink en Vita3K. Pendiente: probar `RECOMP_HW=1` en consola.
+- [x] (2026-10-21) **Memoria para la consola real:** `[MEM]` cada 10 s con el pico del heap de newlib
+      (`mallinfo`). Medido en Vita3K: 42–43 MB de 48 en uso ya en el menú; 30 MB eran la tabla plana de
+      `recomp_dispatch_init` (0x75D10A entradas × 4 B para 14 420 funciones: en Android el calloc no se
+      compromete, en la Vita sí). Fuera la tabla; `compat/dispatch_cache_vita.c` (`--wrap=recomp_lookup`,
+      caché directa de 256 KB delante de la búsqueda binaria). Después: pico 13 MB hasta `menu3D` (log_029).
+      Otros grandes del heap: XBE 4,4 MB, z-buffer 4 MB, APU 1,5 MB, vídeo ~3 MB. Los dos `.psp2dmp` de consola
+      del 2026-10-20 (PC en `glTexImage2D` y `glVertexAttribPointer` de vitaGL) son vitaGL sin memoria con
+      `NO_DEBUG=1`; con `RECOMP_HW=0` por defecto vitaGL no se inicia. **Pendiente: arranque en consola**
+      (la consola no respondía por FTP; sin logs nuevos de ella).
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

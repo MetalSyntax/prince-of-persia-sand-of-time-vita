@@ -21,7 +21,10 @@ if [ "$1" = "--vita3k" ]; then
     TID=$(sed -n 's/.*"titleid": *"\([^"]*\)".*/\1/p' .psvita-toolkit.json)
     [ -d "$V3K/app/$TID" ] || { echo "Instala antes build/vita-port/pop-sot.vpk en Vita3K (arrástralo a la ventana)"; exit 1; }
     cp build/vita-port/eboot.bin "$V3K/app/$TID/eboot.bin"
-    osascript -e 'quit app "Vita3K"' 2>/dev/null; while pgrep -x Vita3K >/dev/null; do sleep 0.5; done
+    # cierre amable 5 s (con SIGTERM Vita3K "se cierra inesperadamente"); si un diálogo lo bloquea, -9
+    osascript -e 'quit app "Vita3K"' >/dev/null 2>&1 & q=$!
+    for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -x Vita3K >/dev/null || break; sleep 0.5; done
+    kill "$q" 2>/dev/null; pkill -9 -x Vita3K; while pgrep -x Vita3K >/dev/null; do sleep 0.5; done
     open -a Vita3K --args -r "$TID"
     echo "Vita3K abierto con $TID; logs en $V3K/data/pop-sot/logs/"
 fi

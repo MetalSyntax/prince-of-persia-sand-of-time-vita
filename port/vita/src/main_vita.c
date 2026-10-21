@@ -11,6 +11,7 @@
  */
 #include <dirent.h>
 #include <errno.h>
+#include <malloc.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,7 +50,6 @@ typedef struct MCPXAPUState MCPXAPUState;
 extern MCPXAPUState *g_apu_state;
 extern MCPXAPUState *mcpx_apu_init_standalone(uint8_t *ram_ptr);
 extern void xbe_entry_point(void);
-extern int  recomp_dispatch_init(void);
 extern void xbox_OhciInit(void);
 extern void xbox_path_init(const char *game_dir, const char *save_dir);
 extern void vita_fb_init(void);
@@ -142,9 +142,11 @@ static void log_free_memory(const char *when)
 {
     SceKernelFreeMemorySizeInfo fm = { sizeof fm };
     sceKernelGetFreeMemorySize(&fm);
-    fprintf(stderr, "[MEM] %s: libre user %u KB, cdram %u KB, phycont %u KB; heap newlib %u MB\n",
+    struct mallinfo mi = mallinfo();   /* arena = pico del heap (newlib no lo devuelve) */
+    fprintf(stderr, "[MEM] %s: libre user %u KB, cdram %u KB, phycont %u KB; heap newlib %u MB, "
+            "en uso %u KB, pico %u KB\n",
             when, fm.size_user >> 10, fm.size_cdram >> 10, fm.size_phycont >> 10,
-            (unsigned)(_newlib_heap_size_user >> 20));
+            (unsigned)(_newlib_heap_size_user >> 20), (unsigned)mi.uordblks >> 10, (unsigned)mi.arena >> 10);
 }
 
 static void set_default(const char *name, const char *value)
@@ -219,8 +221,8 @@ static void *game_main(void *unused)
 #endif
     xbox_OhciInit();
     g_esp = XBOX_STACK_TOP;
-    if (!recomp_dispatch_init())
-        fprintf(stderr, "[BOOT] sin despacho plano; las llamadas indirectas usan búsqueda binaria\n");
+    /* Sin recomp_dispatch_init(): su tabla plana son 30 MB del heap de newlib.
+     * Las llamadas indirectas usan la caché de compat/dispatch_cache_vita.c. */
     xbox_WatchdogStart();
 
     printf("\nIniciando el juego...\n");
@@ -290,8 +292,9 @@ int main(void)
     }
     pthread_attr_destroy(&attr);
 
-    for (;;) {
+    for (unsigned tick = 1;; tick++) {
         vita_fb_pump();   /* muestra el último frame y atiende el mando */
+        if (tick % 600 == 0) log_free_memory("cada 10 s");
         if (!s_game_running) {
             fflush(stdout);
             fflush(stderr);
