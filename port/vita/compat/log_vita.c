@@ -6,6 +6,12 @@
  * cada hilo junta su línea y se emite entera. Una línea o un bloque de hasta
  * MAXK líneas que se repite exactamente se escribe una vez y luego "  ↑ xN"
  * ("  ↑ K líneas xN" para bloques). vita_log_tick() vuelca la cuenta en curso.
+ *
+ * Asíncrono: cada sceIoWrite a la tarjeta tardaba ~5 ms y el hilo que escribía
+ * se quedaba parado (log_010: una línea cada ~17 ms; el arranque tardaba 56 s y
+ * los hilos del juego y del ejecutor esperaban al log). Las líneas van a un
+ * búfer en memoria y log_thread lo vuelca en bloque cada 100 ms; si se llena, se
+ * cuentan las perdidas. Un crash pierde como mucho los últimos 100 ms.
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -13,12 +19,16 @@
 
 #include <psp2/io/fcntl.h>
 #include <psp2/kernel/processmgr.h>
+#include <psp2/kernel/threadmgr.h>
 
 #define LMAX 512
 #define HIST 16
 #define MAXK 8
 
 static SceUID s_fd = -1;
+#define OUTBUF (128 * 1024)
+static char s_out[2][OUTBUF];     /* doble búfer: uno se llena mientras el otro se escribe */
+static unsigned s_out_len[2], s_out_cur, s_out_lost;
 static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
 static char s_hist[HIST][LMAX];   /* últimas líneas escritas (anillo) */
 static unsigned s_nh;
@@ -53,6 +63,41 @@ static int over_limit(const char *line)
     return 1;
 }
 
+/* Con s_lock tomado: al búfer en memoria; lo escribe log_thread. */
+static void out(const char *p, size_t n)
+{
+    unsigned c = s_out_cur;
+    if (s_out_len[c] + n > OUTBUF) { s_out_lost++; return; }
+    memcpy(s_out[c] + s_out_len[c], p, n);
+    s_out_len[c] += n;
+}
+
+/* Vuelca lo acumulado (fuera del lock la escritura lenta). */
+void vita_log_flush(void)
+{
+    unsigned c;
+    char lost[64];
+    int n = 0;
+    pthread_mutex_lock(&s_lock);
+    c = s_out_cur;
+    s_out_cur ^= 1;
+    if (s_out_lost) { n = snprintf(lost, sizeof lost, "  [LOG] %u l\xC3\xADneas perdidas (b\xC3\xBA" "fer lleno)\n", s_out_lost); s_out_lost = 0; }
+    pthread_mutex_unlock(&s_lock);
+    if (s_out_len[c]) sceIoWrite(s_fd, s_out[c], s_out_len[c]);
+    if (n > 0) sceIoWrite(s_fd, lost, n);
+    s_out_len[c] = 0;
+}
+
+static int log_thread(SceSize args, void *argp)
+{
+    (void)args; (void)argp;
+    for (;;) {
+        sceKernelDelayThread(100 * 1000);
+        vita_log_flush();
+    }
+    return 0;
+}
+
 static const char *hist_back(unsigned back)   /* 1 = la última */
 {
     return s_hist[(s_nh - back) % HIST];
@@ -66,9 +111,9 @@ static void emit(const char *line)
     if (over_limit(line)) return;
     /* segundos desde el arranque: dónde se va el tiempo (arranque, cargas, vídeos) */
     sn = snprintf(stamp, sizeof stamp, "%7.2f ", (double)sceKernelGetProcessTimeWide() / 1e6);
-    sceIoWrite(s_fd, stamp, sn);
-    sceIoWrite(s_fd, line, n);
-    sceIoWrite(s_fd, "\n", 1);
+    out(stamp, (size_t)sn);
+    out(line, n);
+    out("\n", 1);
     memcpy(s_hist[s_nh % HIST], line, n + 1);
     s_nh++;
     s_after_mark = 0;
@@ -83,7 +128,7 @@ static void flush_repeat(void)
         const char *op = s_base ? "x" : "+";   /* "+N": sigue al aviso anterior */
         int n = s_k == 1 ? snprintf(mark, sizeof mark, "  \xE2\x86\x91 %s%d\n", op, s_reps + s_base)
                          : snprintf(mark, sizeof mark, "  \xE2\x86\x91 %d l\xC3\xADneas %s%d\n", s_k, op, s_reps + s_base);
-        sceIoWrite(s_fd, mark, n);
+        out(mark, (size_t)n);
         s_after_mark = 1;
     }
     s_k = 0;
@@ -140,6 +185,10 @@ void vita_log_install(const char *path)
     setvbuf(stderr, NULL, _IONBF, 0);
     stdout->_write = log_write;
     stderr->_write = log_write;
+    {
+        SceUID t = sceKernelCreateThread("pop-log", log_thread, 0x10000100 + 16, 0x4000, 0, 0, NULL);
+        if (t >= 0) sceKernelStartThread(t, 0, NULL);
+    }
 }
 
 void vita_log_tick(void)
@@ -152,7 +201,7 @@ void vita_log_tick(void)
             char mark[96];
             int n = snprintf(mark, sizeof mark, "  \xE2\x86\x91 %s +%u omitidas (l\xC3\xADmite %d cada 10 s)\n",
                              s_tags[i].tag, s_tags[i].omitted, TAG_LIMIT);
-            sceIoWrite(s_fd, mark, n);
+            out(mark, (size_t)n);
         }
         s_tags[i].shown = s_tags[i].omitted = 0;
     }

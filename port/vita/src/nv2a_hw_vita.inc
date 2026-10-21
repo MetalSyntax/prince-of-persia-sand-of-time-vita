@@ -472,6 +472,18 @@ static void vg_blit(GLuint tex, float x, float y, float w, float h, float fbw, f
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
+/* Perfil por fotograma (línea "[HW vita] ... fps"): µs en cada parte del backend. Lo que
+ * el ejecutor tarda de más ("[KICK] ... executing") es CPU de upstream: lectura de
+ * vértices e intérprete de vertex shaders (cpu_vsh). */
+static struct { uint64_t draw, prog_batch, tex, compose, present, verts; } s_prof;
+#if defined(RESOT_HW_GLSL)
+#include <time.h>
+static uint64_t vg_now_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u; }
+#else
+#include <psp2/kernel/processmgr.h>
+static uint64_t vg_now_us(void) { return sceKernelGetProcessTimeWide(); }
+#endif
+
 /* ── init ────────────────────────────────────────────────── */
 
 #if !defined(RESOT_HW_GLSL)
@@ -714,7 +726,7 @@ static void vg_sampler(VgTexture *c, const Texture *t, GLenum target)
 
 /* La textura de la etapa: un render target por offset, o la decodificada de
  * memoria guest (sample_tex, como el rasterizador por software) en caché. */
-static GLuint vg_texture(int stage, VgSurface *target)
+static GLuint vg_texture_body(int stage, VgSurface *target)
 {
     const Texture *t = &s_gpu.texs[stage];
     VgSurface *best = NULL;
@@ -779,6 +791,13 @@ bind:
     glBindTexture(gtarget, c->tex);
     vg_sampler(c, t, gtarget);
     return c->tex;
+}
+static GLuint vg_texture(int stage, VgSurface *target)
+{
+    uint64_t t = vg_now_us();
+    GLuint r = vg_texture_body(stage, target);
+    s_prof.tex += vg_now_us() - t;
+    return r;
 }
 
 /* ── dibujo ──────────────────────────────────────────────── */
@@ -920,7 +939,7 @@ static VgProgram *vg_begin_draw(VgSurface **out, uint32_t vsp)
     return p;
 }
 
-static void ng_draw(const HwVertex *v, uint32_t count)
+static void ng_draw_body(const HwVertex *v, uint32_t count)
 {
     VgSurface *s;
     uint32_t i;
@@ -940,6 +959,13 @@ static void ng_draw(const HwVertex *v, uint32_t count)
     }
     ng_mark(s); s_hw.draws++; s_hw.cpu_vsh_batches++; s_hw.tris += count / 3;
     s_gpu.tris_drawn += count / 3; s_gpu.xf_drawn += count / 3;
+}
+static void ng_draw(const HwVertex *v, uint32_t count)
+{
+    uint64_t t = vg_now_us();
+    ng_draw_body(v, count);
+    s_prof.draw += vg_now_us() - t;
+    s_prof.verts += count;
 }
 
 /* ── vertex programs en la GPU (V1.2) ────────────────────────
@@ -1071,7 +1097,7 @@ static uint32_t vg_vsp_get(const uint8_t *inputs, uint32_t ninputs)
     return seen = e->vs ? (uint32_t)(e - s_vg.vsp) + 1 : 0;
 }
 
-static int ng_draw_program_batch(void)
+static int ng_draw_program_batch_body(void)
 {
     static uint32_t stamp[65536], batch_id;
     static uint16_t remap[65536];
@@ -1164,6 +1190,13 @@ static int ng_draw_program_batch(void)
     LeaveCriticalSection(&s_hw.lock);
     return 1;
 }
+static int ng_draw_program_batch(void)
+{
+    uint64_t t = vg_now_us();
+    int r = ng_draw_program_batch_body();
+    s_prof.prog_batch += vg_now_us() - t;
+    return r;
+}
 
 
 static void ng_clear(uint32_t param)
@@ -1203,7 +1236,7 @@ static void ng_clear(uint32_t param)
 
 /* ── pantalla ────────────────────────────────────────────── */
 
-static void ng_compose(void)
+static void ng_compose_body(void)
 {
     const uint32_t *pixels;
     uint32_t w, h, rect[4], serial;
@@ -1285,14 +1318,26 @@ static void ng_compose(void)
     }
     s_hw.pending_present = 1;
 }
+static void ng_compose(void)
+{
+    uint64_t t = vg_now_us();
+    ng_compose_body();
+    s_prof.compose += vg_now_us() - t;
+}
 
-static void ng_present(int sync)
+static void ng_present_body(int sync)
 {
     (void)sync;   /* vitaGL sincroniza con el vblank */
     if (!s_hw.pending_present) return;
     vglSwapBuffers(GL_FALSE);
     s_hw.pending_present = 0;
     s_hw.last_flip_ms = GetTickCount();
+}
+static void ng_present(int sync)
+{
+    uint64_t t = vg_now_us();
+    ng_present_body(sync);
+    s_prof.present += vg_now_us() - t;
 }
 
 static void ng_flip(void)
@@ -1314,9 +1359,14 @@ static void ng_flip(void)
     if (!last_log) { last_log = now; last_frame = s_hw.frame; last_draws = s_hw.draws; }
     else if (now - last_log >= 5000) {
         uint32_t frames = s_hw.frame - last_frame;
-        fprintf(stderr, "[HW vita] %.1f fps; %.1f draws/frame; %u shaders; %llu texturas subidas\n",
+        double fr = frames ? (double)frames : 1.0;
+        fprintf(stderr, "[HW vita] %.1f fps; %.1f draws/frame; %u shaders; %llu texturas subidas; ms/frame: "
+                "draw %.1f, prog %.1f, tex %.1f, compose %.1f, present %.1f; %.0f vért/frame\n",
                 frames * 1000.0 / (now - last_log), frames ? (double)(s_hw.draws - last_draws) / frames : 0,
-                s_vg.nprograms, (unsigned long long)s_hw.tex_uploads);
+                s_vg.nprograms, (unsigned long long)s_hw.tex_uploads,
+                s_prof.draw / 1000.0 / fr, s_prof.prog_batch / 1000.0 / fr, s_prof.tex / 1000.0 / fr,
+                s_prof.compose / 1000.0 / fr, s_prof.present / 1000.0 / fr, s_prof.verts / fr);
+        memset(&s_prof, 0, sizeof s_prof);
         last_log = now; last_frame = s_hw.frame; last_draws = s_hw.draws;
     }
     ng_compose();

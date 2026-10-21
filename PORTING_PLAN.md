@@ -364,6 +364,14 @@ Fases concretas:
       un puerto VOICE. Mismos enganches que antes (rutina de estado de Bink y `kernel_path.c`). Coste medido
       en un M4: 0,27–0,30 ms/cuadro con 1 hilo (est. 11–18 ms en el A9). log_009 (build anterior): en el 3D
       1,4–2,6 fps con ~230 draws y 120 texturas por fotograma.
+- [ ] (2026-10-21) **log_010:** vídeos FFmpeg fluidos (decodificación media 6–10 ms/cuadro). Arranque: 56 s sin
+      pintar; el log escribía una línea cada ~17 ms (3 sceIoWrite síncronos por línea) y frenaba a quien
+      escribía. Menú/juego 0,4–2,5 fps: el ejecutor ocupado 5,7 s de cada 10 (~12 ms de CPU por draw) y el juego
+      esperándolo hasta 1,9 s. Cambios: log asíncrono (búfer de 2x128 KB, hilo `pop-log` cada 100 ms) y perfil
+      por fotograma en la línea de fps (draw/prog/tex/compose/present y vértices). Speedhacks de vitaGL de
+      Asphalt 5/6 y DH2/3 revisados: `DRAW_SPEEDHACK=2` hace que la GPU lea el puntero de cliente sin copia y
+      nuestro `s_hw.verts` (no mapeado, reescrito en cada draw) daría basura; ahorra un memcpy, no 12 ms.
+      Sospecha a confirmar con el perfil: `cpu_vsh=1` (intérprete de vertex shaders en la CPU).
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.
