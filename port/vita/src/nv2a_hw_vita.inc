@@ -475,9 +475,10 @@ static int ng_init(const char *backend)
     const char *flip = getenv("RECOMP_VITA_RT_FLIP");
     int f;
     (void)backend;
-    /* 16 MB de RAM quedan para el runtime (pilas de hilos, archivos); vitaGL
-     * toma el resto de la memoria libre para su pool. */
-    if (!vglInitExtended(0, VG_SCREEN_W, VG_SCREEN_H, 16 * 1024 * 1024, VG_MSAA_NONE)) {
+    /* 32 MB de RAM quedan para el runtime (pilas de los hilos que el juego crea
+     * después, archivos); vitaGL toma el resto de la memoria libre para su pool. */
+    fprintf(stderr, "[HW vita] vglInitExtended (deja 32 MB de RAM al runtime)\n");
+    if (!vglInitExtended(0, VG_SCREEN_W, VG_SCREEN_H, 32 * 1024 * 1024, VG_MSAA_NONE)) {
         fprintf(stderr, "[HW vita] vglInitExtended falló: rasterizador por software\n");
         return 0;
     }

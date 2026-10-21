@@ -42,8 +42,9 @@ Método y referencias: `../../README.md` y `~/MD/xbox-to-vita-ports.md` (THUG y 
 3. **No asumas, confirma.** Afirmaciones sobre formatos, motor o funciones van con evidencia (offset,
    firma, función de Ghidra, hash). Lo no confirmado se marca *hipótesis*.
 4. **`upstream/` no se edita:** las diferencias de la Vita van en `port/vita/` (vitaize.py copia y parchea en el build).
-5. **Renderer:** por defecto software (`RECOMP_HW=0`); vitaGL con `RECOMP_HW=1` en `ux0:data/pop-sot/env.txt`.
-   Vita3K 0.2.1 (macOS) no muestra nada de vitaGL, ni un `glClear`: valida vitaGL solo en la consola.
+5. **Renderer:** vitaGL por defecto (`RECOMP_HW=1`): el rasterizador por software tarda minutos por fotograma
+   en consola. Vita3K 0.2.1 (macOS) no muestra nada de vitaGL: ahí `RECOMP_HW=0` en `ux0:data/pop-sot/env.txt`.
+   Las pruebas se hacen en la consola real, no en Vita3K (decisión del usuario, 2026-10-21).
 6. **Un bug a la vez, guiado por log/dump.** Para crashes en consola: `vita-parse-core` sobre el
    `.psp2dmp` + `addr2line`, metodología de la skill `so-crash-triage`.
 7. **Nada del disco al repo** (`.gitignore` anti-DMCA). Nunca subas ISO/XBE/datos/exports de Ghidra.

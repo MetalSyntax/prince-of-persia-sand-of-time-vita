@@ -296,6 +296,12 @@ Fases concretas:
       hambre de CPU (la Vita no reparte tiempo entre hilos de igual prioridad en un núcleo). Siguiente prueba:
       `compat/threads_vita.c` registra todos los hilos (`[THR]` cada 10 s: prioridad, núcleo, máscara, % CPU)
       y les da afinidad a los 3 núcleos (`RECOMP_VITA_AFFINITY=0` lo quita).
+- [ ] (2026-10-21) **Segunda prueba en consola** (`logs/log_002.log`): sigue negro. `[THR]`: CPU baja (máx. 27 %,
+      `mcpx_apu_frame_thread`), no es hambre de CPU. `nv2a_ack_thread` (núcleo 2) y `kernel_timer_thread` (núcleo 1)
+      siempre RUNNING sin cambiar de contexto: el ack thread es el que ejecuta el pushbuffer (`nv2a_pb_scan`), metido
+      en el rasterizador por software. En Vita3K ese mismo fotograma (24 quads de pantalla completa, 1,5 M píxeles)
+      tardó 12,4 s en un M4: en el A9, minutos. Arreglo: `RECOMP_HW=1` (vitaGL) por defecto; vitaGL deja 32 MB de
+      RAM al runtime (antes 16). Vita3K: `RECOMP_HW=0` en env.txt. Pendiente: tercera prueba en consola.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

@@ -266,9 +266,10 @@ int main(void)
     set_default("RECOMP_PB_EXEC", "1");
     set_default("RECOMP_FB_WINDOW", "1");
     set_default("RECOMP_VBLANK", "1");
-    /* Por software hasta validar vitaGL en la consola: en Vita3K (0.2.1-4210, macOS)
-     * nada de vitaGL llega a la pantalla, ni un glClear (2026-10-21). RECOMP_HW=1 en env.txt. */
-    set_default("RECOMP_HW", "0");
+    /* vitaGL: en consola el rasterizador por software tarda minutos por fotograma (24 quads de
+     * pantalla completa = 12 s en Vita3K sobre un M4; log_002 de consola: parado en el primer
+     * fotograma). Vita3K 0.2.1 no muestra vitaGL (2026-10-21): ahí, RECOMP_HW=0 en env.txt. */
+    set_default("RECOMP_HW", "1");
     if (!strcmp(getenv("RECOMP_HW"), "0"))
         unsetenv("RECOMP_HW");   /* upstream solo mira si existe: "0" = rasterizador por software */
     set_default("RECOMP_HW_SCALE", "1");   /* 640x480 nativos: x2 no cabe en la GPU de la Vita */
