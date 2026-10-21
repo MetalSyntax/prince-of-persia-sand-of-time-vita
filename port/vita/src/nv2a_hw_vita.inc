@@ -475,7 +475,7 @@ static void vg_blit(GLuint tex, float x, float y, float w, float h, float fbw, f
 /* Perfil por fotograma (línea "[HW vita] ... fps"): µs en cada parte del backend. Lo que
  * el ejecutor tarda de más ("[KICK] ... executing") es CPU de upstream: lectura de
  * vértices e intérprete de vertex shaders (cpu_vsh). */
-static struct { uint64_t draw, prog_batch, tex, compose, present, verts; } s_prof;
+static struct { uint64_t draw, prog_batch, tex, compose, present, verts, depths; } s_prof;
 #if defined(RESOT_HW_GLSL)
 #include <time.h>
 static uint64_t vg_now_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u; }
@@ -552,8 +552,11 @@ static int ng_init(const char *backend)
 #if !defined(RESOT_HW_GLSL)
     vglUseCachedMem(GL_TRUE);
 #endif
-    fprintf(stderr, "[HW vita] vglInitExtended (deja 32 MB de RAM al runtime)\n");
-    if (!vglInitExtended(0, VG_SCREEN_W, VG_SCREEN_H, 32 * 1024 * 1024, VG_MSAA_NONE)) {
+    /* 16 MB de RAM para el runtime (pilas de hilos, archivos); vitaGL toma el resto. Con 32,
+     * en la partida quedaban 22 MB sin usar mientras vitaGL se quedaba sin memoria y forzaba
+     * recolecciones de segundos (log_011). */
+    fprintf(stderr, "[HW vita] vglInitExtended (deja 16 MB de RAM al runtime)\n");
+    if (!vglInitExtended(0, VG_SCREEN_W, VG_SCREEN_H, 16 * 1024 * 1024, VG_MSAA_NONE)) {
         fprintf(stderr, "[HW vita] vglInitExtended falló: rasterizador por software\n");
         return 0;
     }
@@ -689,6 +692,8 @@ static GLuint vg_depth(VgSurface *s)
             glGenRenderbuffers(1, &depth->rb);
             glBindRenderbuffer(GL_RENDERBUFFER, depth->rb);
             glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, (GLsizei)w, (GLsizei)h);
+            s_prof.depths++;
+            fprintf(stderr, "[HW depth] nuevo 0x%08X %ux%u (frame %u)\n", (unsigned)s_gpu.zeta_offset, w, h, s_hw.frame);
             depth->offset = s_gpu.zeta_offset; depth->w = w; depth->h = h;
             rb = depth->rb;
         }
@@ -1361,11 +1366,18 @@ static void ng_flip(void)
         uint32_t frames = s_hw.frame - last_frame;
         double fr = frames ? (double)frames : 1.0;
         fprintf(stderr, "[HW vita] %.1f fps; %.1f draws/frame; %u shaders; %llu texturas subidas; ms/frame: "
-                "draw %.1f, prog %.1f, tex %.1f, compose %.1f, present %.1f; %.0f vért/frame\n",
+                "draw %.1f, prog %.1f, tex %.1f, compose %.1f, present %.1f; %.0f vért/frame; %llu depth nuevos; "
+                "vitaGL libre VRAM %u KB, RAM %u KB\n",
                 frames * 1000.0 / (now - last_log), frames ? (double)(s_hw.draws - last_draws) / frames : 0,
                 s_vg.nprograms, (unsigned long long)s_hw.tex_uploads,
                 s_prof.draw / 1000.0 / fr, s_prof.prog_batch / 1000.0 / fr, s_prof.tex / 1000.0 / fr,
-                s_prof.compose / 1000.0 / fr, s_prof.present / 1000.0 / fr, s_prof.verts / fr);
+                s_prof.compose / 1000.0 / fr, s_prof.present / 1000.0 / fr, s_prof.verts / fr,
+                (unsigned long long)s_prof.depths,
+#if defined(RESOT_HW_GLSL)
+                0u, 0u);
+#else
+                (unsigned)(vglMemFree(VGL_MEM_VRAM) >> 10), (unsigned)(vglMemFree(VGL_MEM_RAM) >> 10));
+#endif
         memset(&s_prof, 0, sizeof s_prof);
         last_log = now; last_frame = s_hw.frame; last_draws = s_hw.draws;
     }

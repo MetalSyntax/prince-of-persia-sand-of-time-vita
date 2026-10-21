@@ -372,6 +372,15 @@ Fases concretas:
       Asphalt 5/6 y DH2/3 revisados: `DRAW_SPEEDHACK=2` hace que la GPU lea el puntero de cliente sin copia y
       nuestro `s_hw.verts` (no mapeado, reescrito en cada draw) daría basura; ahorra un memcpy, no 12 ms.
       Sospecha a confirmar con el perfil: `cpu_vsh=1` (intérprete de vertex shaders en la CPU).
+- [ ] (2026-10-21) **log_011** (log asíncrono): vitaGL arranca en el s 15 (antes 56). Menú 2,2–3 fps: por
+      fotograma `prog` (batches con vertex programs) 130–235 ms y `tex` 15–115 ms. Tras el menú: negro, sonido a
+      tirones y `draw` de 68 a 8000 ms/fotograma con solo ~144 vértices: esperas dentro de vitaGL. Causa: memoria
+      agotada en dos sitios. (1) vitaGL: `gpu_alloc_mapped_aligned_for_gpu failed … 1228800` (640x480x4, un
+      depth D24S8) y recolecciones forzadas de varios ciclos; la memoria temporal de cada draw solo se libera en
+      `vglSwapBuffers` y en la partida un fotograma dura segundos. (2) Heap de newlib lleno (pico 48,9 de 48 MB,
+      +300 KB/10 s). Cambios: vitaGL deja 16 MB al runtime (antes 32; quedaban 22 MB sin usar); en el log,
+      VRAM/RAM libres de vitaGL y depth buffers creados por fotograma (`[HW depth]`), y reservas ≥256 KB del heap
+      con su llamador (`[BIG]`). Pendiente según ese log: qué recrea depth buffers y qué llena el heap.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

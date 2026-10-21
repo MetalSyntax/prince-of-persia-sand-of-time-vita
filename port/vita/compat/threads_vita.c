@@ -109,3 +109,24 @@ void vita_threads_log(unsigned interval_ms)
         s_threads[i].last_us = us;
     }
 }
+
+/* Reservas grandes del heap de newlib ([BIG], con el límite del log por etiqueta): log_011
+ * lo mostró lleno (pico 48,9 MB de 48) y creciendo ~300 KB cada 10 s en la partida. */
+void *__real_malloc(size_t);
+void *__real_calloc(size_t, size_t);
+void *__real_realloc(void *, size_t);
+void *__real_memalign(size_t, size_t);
+static volatile unsigned s_big_kb;
+
+static void *big(const char *what, size_t n, void *lr, void *p)
+{
+    if (n >= (256u << 10)) {
+        unsigned total = __atomic_add_fetch(&s_big_kb, (unsigned)(n >> 10), __ATOMIC_RELAXED);
+        fprintf(stderr, "[BIG] %s %u KB lr=%p -> %p (total %u KB)\n", what, (unsigned)(n >> 10), lr, p, total);
+    }
+    return p;
+}
+void *__wrap_malloc(size_t n) { return big("malloc", n, __builtin_return_address(0), __real_malloc(n)); }
+void *__wrap_calloc(size_t a, size_t b) { return big("calloc", a * b, __builtin_return_address(0), __real_calloc(a, b)); }
+void *__wrap_realloc(void *o, size_t n) { return big("realloc", n, __builtin_return_address(0), __real_realloc(o, n)); }
+void *__wrap_memalign(size_t a, size_t n) { return big("memalign", n, __builtin_return_address(0), __real_memalign(a, n)); }
