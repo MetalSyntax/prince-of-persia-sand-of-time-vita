@@ -2,6 +2,7 @@
 # Datos del juego (symlink a la XISO extraída y copias convertidas)
 /game_data
 /game_data/
+/game_data_ntsc
 /converted/
 *.iso
 *.xbe
@@ -40,3 +41,6 @@ __pycache__/
 # vitaGL vendorizado: artefactos de su make
 /port/vita/vendor/vitaGL/**/*.o
 /port/vita/vendor/vitaGL/libvitaGL.a
+
+# Imágenes fuente de la LiveArea (arte promocional, no se redistribuye)
+/port/vita/livearea/art/

@@ -179,7 +179,7 @@ include(ExternalProject)
 ExternalProject_Add(vitaGL_vendored
   SOURCE_DIR "${VITAGL_DIR}" BUILD_IN_SOURCE 1
   CONFIGURE_COMMAND "" INSTALL_COMMAND ""
-  BUILD_COMMAND make NO_DEBUG=1 HAVE_SHADER_CACHE=1
+  BUILD_COMMAND make NO_DEBUG=1 HAVE_SHADER_CACHE=1 NO_SPLASHSCREEN=1 LOG_ERRORS=1
   BUILD_BYPRODUCTS "${VITAGL_DIR}/libvitaGL.a")
 add_library(vitaGL_lib STATIC IMPORTED)
 set_target_properties(vitaGL_lib PROPERTIES IMPORTED_LOCATION "${VITAGL_DIR}/libvitaGL.a")
@@ -187,15 +187,21 @@ add_dependencies(${PROJECT_NAME} vitaGL_vendored)
 set_property(SOURCE ${VZ}/rt/nv2a_pb_exec.c APPEND PROPERTY INCLUDE_DIRECTORIES "${VITAGL_DIR}/source")
 target_link_libraries(${PROJECT_NAME}
   -Wl,--whole-archive pthread -Wl,--no-whole-archive
+  -Wl,--pic-veneer
   SceDisplay_stub SceSysmem_stub ScePower_stub
   vitaGL_lib vitashark SceShaccCgExt taihen_stub SceShaccCg_stub mathneon
   SceKernelThreadMgr_stub SceIofilemgr_stub SceRtc_stub SceAppUtil_stub SceTouch_stub SceAudio_stub SceAppMgr_stub SceCtrl_stub
   SceGxm_stub SceKernelDmacMgr_stub SceCommonDialog_stub SceDisplay_stub
   m stdc++)  # stdc++ después de vitaGL: es C++ por dentro
 
-vita_create_self(eboot.bin ${PROJECT_NAME} UNSAFE)
+vita_create_self(eboot.bin ${PROJECT_NAME} UNSAFE NOASLR)
 # ATTRIBUTE2=12: memoria extendida (el bloque guest + la ventana contigua son 176 MB).
 set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
 vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} eboot.bin
   VERSION ${VITA_VERSION}
-  NAME ${VITA_APP_NAME})
+  NAME ${VITA_APP_NAME}
+  FILE ${CMAKE_CURRENT_SOURCE_DIR}/livearea/icon0.png sce_sys/icon0.png
+  FILE ${CMAKE_CURRENT_SOURCE_DIR}/livearea/pic0.png sce_sys/pic0.png
+  FILE ${CMAKE_CURRENT_SOURCE_DIR}/livearea/bg0.png sce_sys/livearea/contents/bg0.png
+  FILE ${CMAKE_CURRENT_SOURCE_DIR}/livearea/startup.png sce_sys/livearea/contents/startup.png
+  FILE ${CMAKE_CURRENT_SOURCE_DIR}/livearea/template.xml sce_sys/livearea/contents/template.xml)

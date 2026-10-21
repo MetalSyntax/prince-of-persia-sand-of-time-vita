@@ -12,15 +12,16 @@ Método y referencias: `../../README.md` y `~/MD/xbox-to-vita-ports.md` (THUG y 
 | `game_data_ntsc/` | symlink a la XISO **NTSC** extraída (disco de rePOP, referencia del port) | No |
 | `docs/xbe.md`, `docs/inventory.md` | cabecera del XBE e inventario de datos generados por `new-port.sh` | Sí |
 | `PORTING_PLAN.md` | plan por fases con puertas de decisión: **fuente de verdad del estado** | Sí |
-| `re/` | notas de ingeniería inversa (`re/NOTES.md`); proyecto Ghidra y exports ignorados | Solo notas |
-| `source/` | código del juego (decomp/reconstrucción), sin `#ifdef VITA` | Sí (si la licencia lo permite) |
-| `port/<plat>/` | capa de plataforma: `vita/` (vitaGL), `desktop/` (SDL2+OpenGL de referencia) | Sí |
+| `docs/re-notes.md` | notas de ingeniería inversa (un proyecto Ghidra iría en `re/`, ignorado) | Sí |
+| `upstream/rePOP/` | submódulo: C generado + runtime (base de la Ruta B), no se edita | Sí (submódulo) |
+| `port/vita/` | todo lo de la Vita: `src/` host, `compat/` POSIX/MMU, `hosttest/` ARM32 en Docker, `tools/vitaize.py`, `vendor/vitaGL/`, `livearea/` (la única; `art/` = imágenes fuente, ignorado) | Sí |
+| `build.sh` | compila (`./build.sh`), `--hosttest`, `--vita3k` (instala el eboot y abre Vita3K) | Sí |
 | `data_manifest.txt` | archivos que deben existir en `ux0:data/pop-sot/` | Sí |
 | `converted/` | vídeos/audio convertidos para Vita | No |
 
 ## Datos del port
 
-- Title ID Vita: `PSOT00001` · datos: `ux0:data/pop-sot/` · log: `ux0:data/pop-sot/pop-sot.log`
+- Title ID Vita: `PSOT00001` · datos: `ux0:data/pop-sot/` · logs: `ux0:data/pop-sot/logs/log_NNN.log`
 - Requisito en consola: `ur0:data/libshacccg.suprx` (ShaRKF00D), HENkaku/Enso, VitaShell.
 
 ## Hallazgos clave (detalle y evidencia en `PORTING_PLAN.md` §0)
@@ -40,8 +41,9 @@ Método y referencias: `../../README.md` y `~/MD/xbox-to-vita-ports.md` (THUG y 
    improvises una ruta alternativa grande sin acuerdo.
 3. **No asumas, confirma.** Afirmaciones sobre formatos, motor o funciones van con evidencia (offset,
    firma, función de Ghidra, hash). Lo no confirmado se marca *hipótesis*.
-4. **`source/` no se ensucia:** diferencias de plataforma van en `port/<plat>/`. Nunca `#ifdef VITA` masivo.
-5. **Renderer en dos pasos:** primero `port/desktop` (OpenGL) funcionando, luego Vita modelado sobre él.
+4. **`upstream/` no se edita:** las diferencias de la Vita van en `port/vita/` (vitaize.py copia y parchea en el build).
+5. **Renderer:** por defecto software (`RECOMP_HW=0`); vitaGL con `RECOMP_HW=1` en `ux0:data/pop-sot/env.txt`.
+   Vita3K 0.2.1 (macOS) no muestra nada de vitaGL, ni un `glClear`: valida vitaGL solo en la consola.
 6. **Un bug a la vez, guiado por log/dump.** Para crashes en consola: `vita-parse-core` sobre el
    `.psp2dmp` + `addr2line`, metodología de la skill `so-crash-triage`.
 7. **Nada del disco al repo** (`.gitignore` anti-DMCA). Nunca subas ISO/XBE/datos/exports de Ghidra.
@@ -50,10 +52,10 @@ Método y referencias: `../../README.md` y `~/MD/xbox-to-vita-ports.md` (THUG y 
 ## Comandos
 
 ```bash
-export VITASDK=$HOME/vitasdk PATH=$HOME/vitasdk/bin:$PATH
-cmake -S port/vita -B build/vita && cmake --build build/vita     # -> build/vita/pop-sot.vpk
-VITA_IP=<ip> ../../tools/deploy.sh build/vita/eboot.bin PSOT00001  # iteración rápida (tras instalar el VPK)
-port/vita/hosttest/run.sh build && port/vita/hosttest/run.sh run 900   # arranque en ARM32 (Docker) antes de la consola
+./build.sh                 # -> build/vita-port/pop-sot.vpk (VITASDK=~/vitasdk por defecto)
+./build.sh --vita3k        # + instala el eboot en Vita3K y lo abre (instala el VPK la primera vez)
+./build.sh --hosttest && port/vita/hosttest/run.sh run 900   # arranque en ARM32 (Docker) antes de la consola
+VITA_IP=<ip> ../../tools/deploy.sh build/vita-port/eboot.bin PSOT00001  # consola (tras instalar el VPK)
 python3 -I ../../tools/xbe_info.py game_data/default.xbe --md            # cabecera del XBE
 python3 -I ../../tools/inventory.py game_data                      # inventario de datos
 ../../tools/media2mp4.sh game_data/VIDEO/30fps converted/movies  # vídeos -> MP4

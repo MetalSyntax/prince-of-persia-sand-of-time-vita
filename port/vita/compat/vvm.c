@@ -241,10 +241,27 @@ HANDLE CreateFileMappingA(HANDLE file, LPSECURITY_ATTRIBUTES sa, DWORD protect,
     m->size = maxSizeLow;
     if (s_mappings++ == 0 && maxSizeLow <= RAM_SIZE) {
         m->backing = (uint8_t *)(uintptr_t)s_h;   /* la RAM: la primera que crea el layout */
-    } else if (!(m->backing = alloc_zeroed(page_round(maxSizeLow)))) {
-        free(m);
-        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
-        return NULL;
+    } else {
+#ifdef __vita__
+        if (s_mappings == 2 && maxSizeLow >= (32u << 20)) {
+            SceSize cd_align = 0x40000;
+            SceSize cd_sz = (SceSize)((maxSizeLow + cd_align - 1) & ~(size_t)(cd_align - 1));
+            SceUID cid = sceKernelAllocMemBlock("pop-contig", SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW, cd_sz, NULL);
+            if (cid >= 0 && sceKernelGetMemBlockBase(cid, (void **)&m->backing) >= 0) {
+                memset(m->backing, 0, maxSizeLow);
+                s_committed += maxSizeLow;
+                fprintf(stderr, "[VVM] ventana contigua (%u MB) en CDRAM (%p)\n",
+                        (unsigned)(maxSizeLow >> 20), (void *)m->backing);
+                return (HANDLE)m;
+            }
+            fprintf(stderr, "[VVM] aviso: CDRAM no disponible para la ventana contigua, usando RAM\n");
+        }
+#endif
+        if (!(m->backing = alloc_zeroed(page_round(maxSizeLow)))) {
+            free(m);
+            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            return NULL;
+        }
     }
     return (HANDLE)m;
 }

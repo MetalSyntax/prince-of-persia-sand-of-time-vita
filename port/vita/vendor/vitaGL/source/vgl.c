@@ -551,7 +551,7 @@ GLboolean vglInitWithCustomSizes(int pool_size, int width, int height, int ram_p
 	}
 
 	vgl_inited = GL_TRUE;
-	return res_fallback;
+	return GL_TRUE;
 }
 
 GLboolean vglInitWithCustomThreshold(int pool_size, int width, int height, int ram_threshold, int cdram_threshold, int phycont_threshold, int cdlg_threshold, SceGxmMultisampleMode msaa) {

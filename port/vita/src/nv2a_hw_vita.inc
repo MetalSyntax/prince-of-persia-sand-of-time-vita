@@ -32,10 +32,14 @@ GLboolean vglInitExtended(int legacy_pool_size, int width, int height, int ram_t
 void vglSwapBuffers(GLboolean has_commondialog);
 #define VG_MSAA_NONE 0
 #define VG_RT_FLIP_DEFAULT 0        /* Mesa: GL estándar */
+#define VG_VERTEX_SHADER   GL_VERTEX_SHADER
+#define VG_FRAGMENT_SHADER GL_FRAGMENT_SHADER
 #else
 #include <vitaGL.h>
 #define VG_MSAA_NONE SCE_GXM_MULTISAMPLE_NONE
 #define VG_RT_FLIP_DEFAULT 1        /* hipótesis: vitaGL guarda los FBO de arriba abajo */
+#define VG_VERTEX_SHADER   GL_CG_VERTEX_SHADER_EXT
+#define VG_FRAGMENT_SHADER GL_CG_FRAGMENT_SHADER_EXT
 #endif
 
 #define VG_SCREEN_W 960
@@ -372,13 +376,13 @@ static VgProgram *vg_program(const VgPsKey *k)
     if (!vs) {
         char *v = (char *)malloc(strlen(s_vg_prelude) + sizeof s_vg_vs);
         strcpy(v, s_vg_prelude); strcat(v, s_vg_vs);
-        vs = vg_shader(GL_VERTEX_SHADER, v);
+        vs = vg_shader(VG_VERTEX_SHADER, v);
         free(v);
         if (!vs) vg_fail("vertex shader");
     }
     vsx = k->vsp ? s_vg.vsp[k->vsp - 1].vs : vs;
     src = vg_ps_source(k);
-    fs = vg_shader(GL_FRAGMENT_SHADER, src);
+    fs = vg_shader(VG_FRAGMENT_SHADER, src);
     free(src);
     e = (VgProgram *)calloc(1, sizeof *e);
     if (!e) vg_fail("program allocation");
@@ -436,8 +440,8 @@ static void vg_blit_init(void)
     GLuint vs, fs;
     strcpy(v, s_vg_prelude); strcat(v, vs_src);
     strcpy(f, s_vg_prelude); strcat(f, fs_src);
-    vs = vg_shader(GL_VERTEX_SHADER, v);
-    fs = vg_shader(GL_FRAGMENT_SHADER, f);
+    vs = vg_shader(VG_VERTEX_SHADER, v);
+    fs = vg_shader(VG_FRAGMENT_SHADER, f);
     free(v); free(f);
     if (!vs || !fs || !(s_vg.blit = vg_link(vs, fs, attrs, 1))) vg_fail("blit shader");
     s_vg.blit_tex = glGetUniformLocation(s_vg.blit, "tex");
@@ -491,8 +495,18 @@ static int ng_init(const char *backend)
         glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    /* 25 MB del pool RAM de vitaGL (vglMalloc probaría newlib primero): en el heap de newlib
+     * el malloc fallaba y todo caía en silencio al rasterizador por software. */
+#if defined(RESOT_HW_GLSL)
     s_hw.verts = (HwVertex *)malloc(sizeof(HwVertex) * HW_MAX_VERTS);
-    if (!s_hw.verts) { VG_GL_LEAVE(); return 0; }
+#else
+    s_hw.verts = (HwVertex *)vglAlloc(sizeof(HwVertex) * HW_MAX_VERTS, VGL_MEM_RAM);
+#endif
+    if (!s_hw.verts) {
+        fprintf(stderr, "[HW vita] sin memoria para %u vértices: rasterizador por software\n", (unsigned)HW_MAX_VERTS);
+        VG_GL_LEAVE();
+        return 0;
+    }
     s_hw.cpu_vsh = 1;
     s_hw.cull_face = 0x405; s_hw.front_face = 0x900;
     s_vg.active = 1;
@@ -994,7 +1008,7 @@ static uint32_t vg_vsp_get(const uint8_t *inputs, uint32_t ninputs)
                 "  v_fog = float4(vsh_fog(o[5].x, fogp), 0.0, 0.0, 0.0);\n"
                 "  v_t0 = o[9]; v_t1 = o[10]; v_t2 = o[11]; v_t3 = o[12];\n}\n");
     free(body);
-    e->vs = vg_shader(GL_VERTEX_SHADER, b.p);
+    e->vs = vg_shader(VG_VERTEX_SHADER, b.p);
     free(b.p);
     if (s_vg.nvsp <= 24 || (s_vg.nvsp & 31) == 0 || !e->vs)
         fprintf(stderr, "[HW vita] vertex program %08X (%u entradas) #%u: %s\n", key, ninputs, s_vg.nvsp,

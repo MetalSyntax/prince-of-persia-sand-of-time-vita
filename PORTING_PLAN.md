@@ -202,7 +202,7 @@ Android arm64 vía `port/android/CMakeLists.txt`) a la Vita. El submódulo no se
 - Render V0: `RECOMP_HW=0` → rasterizador por software del ejecutor NV2A sobre la memoria guest.
 - Lo que dejó la sesión anterior sin commitear (fork de 3 758 líneas de `xbox_memory_layout.c`, script que
   apuntaba a un `.patch` inexistente, `qemu_shim.h` copiado que nunca se habría usado) está en
-  `port/vita/attic/` sin borrar.
+  `port/vita/attic/`; eliminado del árbol el 2026-10-21 (nunca se commiteó).
 
 Fases concretas:
 
@@ -262,6 +262,19 @@ Fases concretas:
       Pendiente en consola: orientación de los render targets (`RECOMP_VITA_RT_FLIP` en
       `ux0:data/pop-sot/env.txt`), memoria de vitaGL, rendimiento. Huecos: sin color de mezcla
       constante (vitaGL no tiene glBlendColor), visibilidad aproximada, sin Hor+ (4:3).
+- [x] (2026-10-21) **Vita3K, pantalla negra con sonido:** `ng_init` pedía los 25 MB de vértices
+      (`HW_MAX_VERTS`×128 B) con `malloc` al heap de newlib (48 MB); fallaba y devolvía 0 sin log, y todo
+      el juego caía al rasterizador por software (0,1 fps). Evidencia: logs sin ninguna línea `[HW]`;
+      trazas hasta `glLinkProgram` OK. Arreglo: `vglAlloc(…, VGL_MEM_RAM)` + línea de error (`vglMalloc`
+      prueba newlib primero → luego abortaba en `__pow5mult`). Con el arreglo (log_013/015):
+      `[HW] renderer activo: vitaGL`, `menu3D` cargado, vertex programs en la GPU. Sin verificar aún en
+      Vita3K: captura estable del menú (la ventana se cerró desde fuera).
+- [x] (2026-10-21) **Pantalla negra con sonido desde el arreglo anterior:** al dejar de fallar `ng_init`,
+      el juego pasó a vitaGL y en Vita3K (0.2.1-4210, macOS, OpenGL y Vulkan) no se ve nada de vitaGL: un
+      homebrew mínimo con solo `glClear` rojo + `vglSwapBuffers` sale negro con el vitaGL vendorizado, con el del
+      commit y con el del VitaSDK. Los vídeos se veían porque vitaGL fallaba y quedaba el software. Arreglo:
+      `RECOMP_HW=0` por defecto (main_vita.c); vitaGL con `RECOMP_HW=1` en `env.txt`. Evidencia: log_025 +
+      captura con el logo de Bink en Vita3K. Pendiente: probar `RECOMP_HW=1` en consola.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

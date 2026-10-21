@@ -636,7 +636,7 @@ static inline __attribute__((always_inline)) void compile_shader(shader *s, GLbo
 		s->unif_buf_size = sceGxmProgramGetDefaultUniformBufferSize(res);
 		s->prog = res;
 		SceShaccCgCompileOutput *cout = (SceShaccCgCompileOutput *)shark_get_internal_compile_output();
-		SceShaccCgParameter param = sceShaccCgGetFirstParameter(cout);
+		SceShaccCgParameter param = cout ? sceShaccCgGetFirstParameter(cout) : NULL;
 		while (param) {
 			if (sceShaccCgGetParameterClass(param) == SCE_SHACCCG_PARAMETERCLASS_MATRIX) {
 				matrix_uniform *m = (matrix_uniform *)vglMalloc(sizeof(matrix_uniform));
@@ -661,12 +661,20 @@ static inline __attribute__((always_inline)) void compile_shader(shader *s, GLbo
 #endif
 	shark_clear_output();
 #ifdef HAVE_SHADER_CACHE
-	SceUID f = sceIoOpen(cache_fname, SCE_O_CREAT | SCE_O_WRONLY | SCE_O_TRUNC, 0777);
-	size_t sz;
-	void *buf = serialize_shader(NULL, &sz, s, save_bindings);
-	sceIoWrite(f, buf, sz);
-	sceIoClose(f);
-	vgl_free(buf);
+	if (s->prog && s->size > 0) {
+		SceUID f = sceIoOpen(cache_fname, SCE_O_CREAT | SCE_O_WRONLY | SCE_O_TRUNC, 0777);
+		if (f >= 0) {
+			size_t sz;
+			void *buf = serialize_shader(NULL, &sz, s, save_bindings);
+			if (buf && sz > 0) {
+				sceIoWrite(f, buf, sz);
+			}
+			sceIoClose(f);
+			if (buf) {
+				vgl_free(buf);
+			}
+		}
+	}
 #endif
 }
 
@@ -1761,16 +1769,24 @@ void glCompileShader(GLuint handle) {
 	sprintf(fname, "%s/%s/%llX.gxp", vgl_shader_cache_path, s->type == GL_VERTEX_SHADER ? "v" : "f", XXH3_64bits(s->source, s->size));
 	SceUID f = sceIoOpen(fname, SCE_O_RDONLY, 0777);
 	if (f >= 0) {
-		vgl_free(s->source);
-		s->source = NULL;
 		size_t sz = sceIoLseek(f, 0, SCE_SEEK_END);
-		sceIoLseek(f, 0, SCE_SEEK_SET);
-		void *buf = vglMalloc(sz);
-		sceIoRead(f, buf, sz);
-		sceIoClose(f);
-		unserialize_shader(buf, sz, s, GL_FALSE);
-		vgl_free(buf);
-		return;
+		if (sz > sizeof(uint32_t) + 4) {
+			vgl_free(s->source);
+			s->source = NULL;
+			sceIoLseek(f, 0, SCE_SEEK_SET);
+			void *buf = vglMalloc(sz);
+			if (buf) {
+				sceIoRead(f, buf, sz);
+				sceIoClose(f);
+				unserialize_shader(buf, sz, s, GL_FALSE);
+				vgl_free(buf);
+				return;
+			}
+			sceIoClose(f);
+		} else {
+			sceIoClose(f);
+			sceIoRemove(fname);
+		}
 	}
 #endif
 
@@ -2140,12 +2156,21 @@ void glLinkProgram(GLuint progr) {
 			SceUID f = sceIoOpen(vert_fname, SCE_O_RDONLY, 0777);
 			if (f >= 0) {
 				size_t sz = sceIoLseek(f, 0, SCE_SEEK_END);
-				sceIoLseek(f, 0, SCE_SEEK_SET);
-				void *buf = vglMalloc(sz);
-				sceIoRead(f, buf, sz);
-				sceIoClose(f);
-				unserialize_shader(buf, sz, p->vshader, GL_TRUE);
-				vgl_free(buf);
+				if (sz > sizeof(uint32_t) + 4) {
+					sceIoLseek(f, 0, SCE_SEEK_SET);
+					void *buf = vglMalloc(sz);
+					if (buf) {
+						sceIoRead(f, buf, sz);
+						sceIoClose(f);
+						unserialize_shader(buf, sz, p->vshader, GL_TRUE);
+						vgl_free(buf);
+					} else {
+						sceIoClose(f);
+					}
+				} else {
+					sceIoClose(f);
+					sceIoRemove(vert_fname);
+				}
 			}
 		}
 		if (!p->fshader->prog) {
@@ -2153,12 +2178,21 @@ void glLinkProgram(GLuint progr) {
 			SceUID f = sceIoOpen(frag_fname, SCE_O_RDONLY, 0777);
 			if (f >= 0) {
 				size_t sz = sceIoLseek(f, 0, SCE_SEEK_END);
-				sceIoLseek(f, 0, SCE_SEEK_SET);
-				void *buf = vglMalloc(sz);
-				sceIoRead(f, buf, sz);
-				sceIoClose(f);
-				unserialize_shader(buf, sz, p->fshader, GL_TRUE);
-				vgl_free(buf);
+				if (sz > sizeof(uint32_t) + 4) {
+					sceIoLseek(f, 0, SCE_SEEK_SET);
+					void *buf = vglMalloc(sz);
+					if (buf) {
+						sceIoRead(f, buf, sz);
+						sceIoClose(f);
+						unserialize_shader(buf, sz, p->fshader, GL_TRUE);
+						vgl_free(buf);
+					} else {
+						sceIoClose(f);
+					}
+				} else {
+					sceIoClose(f);
+					sceIoRemove(frag_fname);
+				}
 			}
 		}
 #endif

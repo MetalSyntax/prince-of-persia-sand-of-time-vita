@@ -122,6 +122,12 @@ ANCHORS = {
          "    uint64_t q1 = hi / c, r1 = hi % c;\n"
          "    return (q1 << 32) + (((r1 << 32) | (lo & 0xFFFFFFFFu)) / c);\n"),
     ],
+    # La APU recupera hasta 16 bloques como en la demo: en la Vita cond_timedwait
+    # despierta 10-20 ms tarde, con 1 bloque se perdía ~45 % del audio (cortes).
+    "apu_core.c": [
+        ("#if RESOT_RUNTIME_DEMO\n#define APU_CATCH_UP_US (16 * EP_FRAME_US)\n",
+         "#if 1 /* reSOT Vita */\n#define APU_CATCH_UP_US (16 * EP_FRAME_US)\n"),
+    ],
     # Encoder GPU de la Vita (src/nv2a_hw_vita.inc) en lugar del de Android
     # (SDL GPU/Vulkan); la parte compartida del .inc se compila igual que allí.
     "nv2a_hw_d3d11.inc": [

@@ -648,11 +648,18 @@ uint8_t reload_ffp_shaders(SceGxmVertexAttribute *attrs, SceGxmVertexStream *str
 		if (f >= 0) {
 			// Gathering the precompiled shader from cache
 			uint32_t size = sceIoLseek(f, 0, SCE_SEEK_END);
-			sceIoLseek(f, 0, SCE_SEEK_SET);
-			ffp_vertex_program = (SceGxmProgram *)vglMalloc(size);
-			sceIoRead(f, ffp_vertex_program, size);
-			sceIoClose(f);
-		} else {
+			if (size > 0) {
+				sceIoLseek(f, 0, SCE_SEEK_SET);
+				ffp_vertex_program = (SceGxmProgram *)vglMalloc(size);
+				sceIoRead(f, ffp_vertex_program, size);
+				sceIoClose(f);
+			} else {
+				sceIoClose(f);
+				sceIoRemove(fname);
+				f = -1;
+			}
+		}
+		if (f < 0) {
 			// Restarting vitaShaRK if we released it before
 			if (!is_shark_online)
 				start_shader_compiler();
@@ -868,11 +875,18 @@ uint8_t reload_ffp_shaders(SceGxmVertexAttribute *attrs, SceGxmVertexStream *str
 		if (f >= 0) {
 			// Gathering the precompiled shader from cache
 			uint32_t size = sceIoLseek(f, 0, SCE_SEEK_END);
-			sceIoLseek(f, 0, SCE_SEEK_SET);
-			ffp_fragment_program = (SceGxmProgram *)vglMalloc(size);
-			sceIoRead(f, ffp_fragment_program, size);
-			sceIoClose(f);
-		} else {
+			if (size > 0) {
+				sceIoLseek(f, 0, SCE_SEEK_SET);
+				ffp_fragment_program = (SceGxmProgram *)vglMalloc(size);
+				sceIoRead(f, ffp_fragment_program, size);
+				sceIoClose(f);
+			} else {
+				sceIoClose(f);
+				sceIoRemove(fname);
+				f = -1;
+			}
+		}
+		if (f < 0) {
 			// Restarting vitaShaRK if we released it before
 			if (!is_shark_online)
 				start_shader_compiler();

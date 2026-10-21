@@ -38,7 +38,7 @@
  * compat/vvm.c aparte con sceKernelAllocMemBlock, ya con el log abierto: con
  * 256 MB aquí la Vita no tenía memoria y newlib fallaba antes de main, sin log
  * (primer .psp2dmp en consola, 2026-10-20: LR en _init_vita_heap). */
-int _newlib_heap_size_user = 96 * 1024 * 1024;
+int _newlib_heap_size_user = 48 * 1024 * 1024;
 /* pthread_create sin atributos: 32 KB en VitaSDK (1 MB en Android). Los hilos
  * de temporizador del runtime ejecutan código del juego (DPC/APC). */
 unsigned int _pthread_stack_default_user = 1024 * 1024;
@@ -259,7 +259,9 @@ int main(void)
     set_default("RECOMP_PB_EXEC", "1");
     set_default("RECOMP_FB_WINDOW", "1");
     set_default("RECOMP_VBLANK", "1");
-    set_default("RECOMP_HW", "1");
+    /* Por software hasta validar vitaGL en la consola: en Vita3K (0.2.1-4210, macOS)
+     * nada de vitaGL llega a la pantalla, ni un glClear (2026-10-21). RECOMP_HW=1 en env.txt. */
+    set_default("RECOMP_HW", "0");
     if (!strcmp(getenv("RECOMP_HW"), "0"))
         unsetenv("RECOMP_HW");   /* upstream solo mira si existe: "0" = rasterizador por software */
     set_default("RECOMP_HW_SCALE", "1");   /* 640x480 nativos: x2 no cabe en la GPU de la Vita */
