@@ -53,6 +53,7 @@ Método y referencias: `../../README.md` y `~/MD/xbox-to-vita-ports.md` (THUG y 
 export VITASDK=$HOME/vitasdk PATH=$HOME/vitasdk/bin:$PATH
 cmake -S port/vita -B build/vita && cmake --build build/vita     # -> build/vita/pop-sot.vpk
 VITA_IP=<ip> ../../tools/deploy.sh build/vita/eboot.bin PSOT00001  # iteración rápida (tras instalar el VPK)
+port/vita/hosttest/run.sh build && port/vita/hosttest/run.sh run 900   # arranque en ARM32 (Docker) antes de la consola
 python3 -I ../../tools/xbe_info.py game_data/default.xbe --md            # cabecera del XBE
 python3 -I ../../tools/inventory.py game_data                      # inventario de datos
 ../../tools/media2mp4.sh game_data/VIDEO/30fps converted/movies  # vídeos -> MP4

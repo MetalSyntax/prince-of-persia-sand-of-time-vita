@@ -36,3 +36,7 @@ __pycache__/
 *.pyc
 .vscode/
 .idea/
+
+# vitaGL vendorizado: artefactos de su make
+/port/vita/vendor/vitaGL/**/*.o
+/port/vita/vendor/vitaGL/libvitaGL.a

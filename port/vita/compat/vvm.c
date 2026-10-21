@@ -40,6 +40,19 @@ static int       s_mappings, s_span_given;
 static ptrdiff_t s_contig_offset;
 static size_t    s_committed;
 
+/* La reserva grande fuera del bloque (EXT_VMA de upstream: 191 MB en guest
+ * 0x74000000) se compromete página a página. Con un memalign por tramo, un
+ * memcpy del juego que cruza de página salía del almacenamiento (crash en
+ * hosttest, 2026-10-20). Una arena lineal al inicio de la reserva mantiene
+ * contiguo lo que el guest ve contiguo; más allá, tramos sueltos (con aviso).
+ * ponytail: tamaño fijo; subirlo si el log muestra "fuera de la arena". */
+#ifndef VVM_EXT_ARENA_MB
+#define VVM_EXT_ARENA_MB 64
+#endif
+#define EXT_ARENA ((uint32_t)VVM_EXT_ARENA_MB << 20)
+static uint32_t  s_ext_host, s_ext_size, s_ext_peak;
+static uint8_t  *s_ext_arena;
+
 typedef struct { uint32_t magic; uint8_t *backing; size_t size; } vvm_mapping;
 #define MAPPING_MAGIC 0x56564D4Du
 
@@ -102,6 +115,31 @@ ptrdiff_t xbox_GetMemoryOffset(void) { return s_contig_offset; }
 
 static SIZE_T page_round(SIZE_T n) { return (n + PAGE - 1) & ~(SIZE_T)(PAGE - 1); }
 
+static uint8_t *ext_backing(uint32_t host, uint32_t run)
+{
+    static int warned;
+    uint32_t off = host - s_ext_host;
+    if (!s_ext_host || off >= s_ext_size || off + run > EXT_ARENA) {
+        if (s_ext_host && off < s_ext_size && !warned++)
+            fprintf(stderr, "[VVM] EXT_VMA: commit fuera de la arena de %u MB (guest +0x%08X):"
+                    " los cruces de página ahí no son contiguos\n", VVM_EXT_ARENA_MB, off);
+        return alloc_zeroed(run);
+    }
+    if (!s_ext_arena) {
+        if (!(s_ext_arena = alloc_zeroed(EXT_ARENA))) {
+            fprintf(stderr, "[VVM] no hay %u MB para la arena EXT_VMA\n", VVM_EXT_ARENA_MB);
+            return NULL;
+        }
+        fprintf(stderr, "[VVM] arena EXT_VMA de %u MB en %p\n", VVM_EXT_ARENA_MB, (void *)s_ext_arena);
+    }
+    memset(s_ext_arena + off, 0, run);   /* recomprometer da ceros, como en Win32 */
+    if (off + run > s_ext_peak + (1u << 20) || (off + run > s_ext_peak && !s_ext_peak)) {
+        s_ext_peak = off + run;
+        fprintf(stderr, "[VVM] EXT_VMA: pico comprometido %u KB\n", s_ext_peak >> 10);
+    }
+    return s_ext_arena + off;
+}
+
 LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD type, DWORD protect)
 {
     uint32_t a = (uint32_t)(uintptr_t)address, p;
@@ -134,11 +172,12 @@ LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD type, DWORD protect)
             while (p + run < size && s_state[(a + p + run) >> VVM_PAGE_SHIFT] == 2) p += PAGE;
             while (p + run < size && s_state[(a + p + run) >> VVM_PAGE_SHIFT] != 2) run += PAGE;
             if (!run) break;
-            if (!(real = alloc_zeroed(run))) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return NULL; }
+            if (!(real = ext_backing(a + p, run))) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return NULL; }
             map_range(a + p, run, real, 2);
             p += run;
         }
     } else {
+        if (!s_ext_host && size >= (16u << 20)) { s_ext_host = a; s_ext_size = size; }
         void_range(a, size, 1);
     }
     if (type & MEM_RESERVE) view_register(address, size);
@@ -228,7 +267,9 @@ BOOL UnmapViewOfFile(LPCVOID baseAddr)
     return TRUE;
 }
 
-/* Lo que el VirtualAlloc de upstream (renombrado y sin uso) aún enlaza. */
+/* Lo que el VirtualAlloc de upstream (renombrado y sin uso) aún enlaza. En
+ * Linux (hosttest) son los de glibc: el JIT de Mesa los necesita de verdad. */
+#ifdef __vita__
 void *mmap(void *addr, size_t len, int prot, int flags, int fd, long off)
 {
     (void)addr; (void)len; (void)prot; (void)flags; (void)fd; (void)off;
@@ -238,3 +279,4 @@ int munmap(void *addr, size_t len) { (void)addr; (void)len; return -1; }
 int mprotect(void *addr, size_t len, int prot) { (void)addr; (void)len; (void)prot; return -1; }
 int memfd_create(const char *name, unsigned flags) { (void)name; (void)flags; return -1; }
 long syscall(long number, ...) { (void)number; return -1; }
+#endif

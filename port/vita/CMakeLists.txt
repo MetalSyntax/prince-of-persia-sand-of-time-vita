@@ -8,7 +8,11 @@ cmake_minimum_required(VERSION 3.16)
 # vita.cmake de VitaSDK declara cmake_minimum_required < 3.5, que CMake 4 rechaza
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "")
 
-if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+# HOSTTEST=ON: el mismo programa para Linux ARM32 (hosttest/run.sh, Docker armv7)
+# con un psp2 falso, para arrancar el juego y cazar crashes antes de la consola.
+option(HOSTTEST "Compilar para Linux ARM32 con hosttest/psp2_fake.c" OFF)
+
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND NOT HOSTTEST)
   if(DEFINED ENV{VITASDK})
     set(CMAKE_TOOLCHAIN_FILE "$ENV{VITASDK}/share/vita.toolchain.cmake" CACHE PATH "toolchain file")
   else()
@@ -17,13 +21,18 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
 endif()
 
 project(pop-sot C)
-include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
+if(NOT HOSTTEST)
+  include("$ENV{VITASDK}/share/vita.cmake" REQUIRED)
+endif()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(VITA_APP_NAME "Prince of Persia: The Sands of Time")
 set(VITA_TITLEID  "PSOT00001")
 set(VITA_VERSION  "00.02")
 set(DATA_DIR      "ux0:data/pop-sot")
+if(HOSTTEST)
+  set(DATA_DIR "/data")
+endif()
 set(TARGET_ID     "xbox-retail")
 
 get_filename_component(PORT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
@@ -42,12 +51,17 @@ endforeach()
 configure_file(src/manifest.h.in "${CMAKE_CURRENT_BINARY_DIR}/manifest.h" @ONLY)
 
 # ── copias traducidas (vitaize.py) ─────────────────────────────
+# DirectSound generado: sus accesos a registros de la APU pasan por
+# compat/mmio_vita.h (la Vita no tiene trampas de página).
+set(DSOUND_GEN source/${TARGET_ID}/gen/xdk/dsound/dsound_0000.c source/${TARGET_ID}/gen/xdk/dsound/dsound_0001.c)
 set(VITAIZED
   kernel/xbox_memory_layout.c kernel/kernel_bridge.c kernel/kernel_rtl.c
   kernel/kernel_hal.c kernel/kernel_thunks.c
   kernel/nv2a_pb_exec.c nv2a/qemu_shim.h apu/apu_shim.h apu/apu_state.h
   apu/apu_core.c apu/apu_vp.c apu/apu_dsp.c apu/apu_mmio_hook.c
-  port/game/recomp_manual.c port/game/guest_probe.h source/${TARGET_ID}/target_hooks.c)
+  port/game/recomp_manual.c port/game/guest_probe.h source/${TARGET_ID}/target_hooks.c
+  platform/win32_compat.c kernel/guest_vmem.c port/windows/src/scene.c kernel/nv2a_hw_d3d11.inc
+  ${DSOUND_GEN})
 set(_vz_inputs "${CMAKE_CURRENT_SOURCE_DIR}/tools/vitaize.py" "${TGT}/gen/recomp_types.h")
 foreach(f IN LISTS VITAIZED)
   if(f MATCHES "^(port|source)/")
@@ -67,13 +81,13 @@ endif()
 
 # ── runtime compartido, como lo compila Android ────────────────
 set(RUNTIME_SOURCES
-  ${RT}/platform/win32_compat.c
+  ${VZ}/rt/win32_compat.c
   ${RT}/kernel/kernel_path.c ${RT}/kernel/kernel_pool.c ${VZ}/rt/kernel_rtl.c
   ${RT}/kernel/kernel_memory.c ${RT}/kernel/kernel_file.c ${RT}/kernel/kernel_thread.c
   ${RT}/kernel/kernel_sync.c ${VZ}/rt/kernel_hal.c ${RT}/kernel/kernel_xbox.c
   ${RT}/kernel/kernel_ob.c ${RT}/kernel/kernel_io.c ${RT}/kernel/kernel_crypto.c
   ${VZ}/rt/kernel_thunks.c ${VZ}/rt/kernel_bridge.c ${VZ}/rt/xbox_memory_layout.c
-  ${RT}/kernel/guest_vmem.c ${RT}/kernel/icall_feedback.c ${RT}/kernel/recomp_trace.c
+  ${VZ}/rt/guest_vmem.c ${RT}/kernel/icall_feedback.c ${RT}/kernel/recomp_trace.c
   ${RT}/kernel/nv2a_pb_scan.c ${VZ}/rt/nv2a_pb_exec.c ${RT}/kernel/nv2a_vsh_interp.c
   ${RT}/kernel/nv2a_combiner.c
   ${RT}/audio/dsound_device.c ${RT}/audio/wma_decoder.c
@@ -84,16 +98,22 @@ set(RUNTIME_SOURCES
 
 set(HOST_SOURCES
   src/main_vita.c src/fb_vita.c src/input_vita.c src/audio_vita.c compat/vvm.c compat/posix_vita.c
+  compat/mmio_vita.c
   ${REPOP}/port/android/src/options_android.c
   ${REPOP}/port/android/src/host_files.c
   ${REPOP}/port/android/src/sha256.c
-  ${REPOP}/port/windows/src/scene.c
+  ${VZ}/rt/scene.c
   ${VZ}/rt/recomp_manual.c)
 
 file(GLOB_RECURSE GEN_SOURCES CONFIGURE_DEPENDS "${TGT}/gen/*.c")
 if(NOT GEN_SOURCES)
   message(FATAL_ERROR "Sin C generado en ${TGT}/gen (git submodule update --init)")
 endif()
+foreach(f IN LISTS DSOUND_GEN)
+  get_filename_component(_name "${f}" NAME)
+  list(REMOVE_ITEM GEN_SOURCES "${REPOP}/${f}")
+  list(APPEND GEN_SOURCES "${VZ}/gen/${_name}")
+endforeach()
 
 add_executable(${PROJECT_NAME} ${RUNTIME_SOURCES} ${HOST_SOURCES} ${VZ}/rt/target_hooks.c ${GEN_SOURCES})
 
@@ -102,17 +122,19 @@ add_executable(${PROJECT_NAME} ${RUNTIME_SOURCES} ${HOST_SOURCES} ${VZ}/rt/targe
 # 8 MB, sin pthread_cancel). Fuera quedan el layout (reserva 4 GB) y el
 # ejecutor NV2A (incluiría el encoder SDL/Vulkan).
 set_source_files_properties(
-  ${RT}/platform/win32_compat.c
+  ${VZ}/rt/win32_compat.c
   ${RT}/kernel/kernel_path.c ${RT}/kernel/kernel_file.c ${VZ}/rt/kernel_bridge.c
-  ${RT}/kernel/guest_vmem.c ${RT}/kernel/nv2a_pb_scan.c ${VZ}/rt/target_hooks.c
+  ${VZ}/rt/guest_vmem.c ${RT}/kernel/nv2a_pb_scan.c ${VZ}/rt/target_hooks.c
   PROPERTIES COMPILE_DEFINITIONS "__ANDROID__=1")
 # Su VirtualAlloc/vistas mmap se sustituyen por compat/vvm.c.
-set_property(SOURCE ${RT}/platform/win32_compat.c APPEND PROPERTY COMPILE_DEFINITIONS
+set_property(SOURCE ${VZ}/rt/win32_compat.c APPEND PROPERTY COMPILE_DEFINITIONS
   VirtualAlloc=w32u_VirtualAlloc VirtualFree=w32u_VirtualFree VirtualProtect=w32u_VirtualProtect
   CreateFileMappingA=w32u_CreateFileMappingA CreateFileMappingW=w32u_CreateFileMappingW
   MapViewOfFileEx=w32u_MapViewOfFileEx MapViewOfFile=w32u_MapViewOfFile
   UnmapViewOfFile=w32u_UnmapViewOfFile)
 # xbox_GetMemoryOffset() lo da compat/vvm.c (desplazamiento de la ventana contigua).
+# Backend GPU (V1.1): la parte compartida de nv2a_hw_d3d11.inc + src/nv2a_hw_vita.inc.
+set_property(SOURCE ${VZ}/rt/nv2a_pb_exec.c APPEND PROPERTY COMPILE_DEFINITIONS RESOT_HW_VITA=1)
 set_property(SOURCE ${VZ}/rt/xbox_memory_layout.c APPEND PROPERTY COMPILE_DEFINITIONS
   xbox_GetMemoryOffset=xbox_GetMemoryOffset_upstream
   __linux__=1)  # solo para la estructura EXCEPTION_POINTERS de win32_compat.h (sus VEH no saltan)
@@ -121,7 +143,7 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
   RESOT_RUNTIME_RETAIL=1 _GNU_SOURCE "RESOT_DEFAULT_ASPECT=\"16:9\""
   DATA_DIR="${DATA_DIR}" APP_SLUG="${PROJECT_NAME}")
 target_include_directories(${PROJECT_NAME} PRIVATE
-  "${VZ}/rt" "${VZ}" "${CMAKE_CURRENT_SOURCE_DIR}/compat" "${CMAKE_CURRENT_BINARY_DIR}"
+  "${VZ}/rt" "${VZ}" "${CMAKE_CURRENT_SOURCE_DIR}/compat" "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_BINARY_DIR}"
   "${TGT}" "${TGT}/gen"
   "${RT}" "${RT}/kernel" "${RT}/platform" "${RT}/apu" "${RT}/nv2a" "${RT}/usb"
   "${RT}/input" "${RT}/audio" "${RT}/video" "${RT}/d3d"
@@ -135,11 +157,40 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 # runtime la encuentra antes por ${VZ} en la ruta de includes.
 set_property(SOURCE ${GEN_SOURCES} APPEND PROPERTY COMPILE_DEFINITIONS RECOMP_GENERATED_CODE)
 set_property(SOURCE ${GEN_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -include "${VZ}/recomp_types.h")
+if(HOSTTEST)
+  # Solo los headers psp2 de VitaSDK (no su newlib): copiados por hosttest/run.sh.
+  target_sources(${PROJECT_NAME} PRIVATE hosttest/psp2_fake.c hosttest/window_sdl.c)
+  target_include_directories(${PROJECT_NAME} PRIVATE "${PSP2_INCLUDE}")
+  target_compile_options(${PROJECT_NAME} PRIVATE -mthumb -mfpu=neon)   # como la Vita (Cortex-A9)
+  # Arena grande para medir el pico de EXT_VMA que la Vita debe cubrir (vvm.c).
+  set_property(SOURCE compat/vvm.c APPEND PROPERTY COMPILE_DEFINITIONS VVM_EXT_ARENA_MB=160)
+  # GL de Mesa (llvmpipe) en lugar de vitaGL; shaders en GLSL (nv2a_hw_vita.inc)
+  set_property(SOURCE ${VZ}/rt/nv2a_pb_exec.c APPEND PROPERTY COMPILE_DEFINITIONS RESOT_HW_GLSL=1)
+  target_sources(${PROJECT_NAME} PRIVATE hosttest/vitagl_fake.c)
+  target_link_libraries(${PROJECT_NAME} SDL2 EGL OpenGL pthread m)
+  return()
+endif()
+# vitaGL vendorizado (vendor/vitaGL/VENDORED.md, el mismo árbol que Skater Nation):
+# ABI hard-float de VitaSDK, sin logs de depuración y con caché de shaders CG
+# compilados en ux0:data (el generador de combiners crea decenas por escena).
+set(VITAGL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/vitaGL")
+include(ExternalProject)
+ExternalProject_Add(vitaGL_vendored
+  SOURCE_DIR "${VITAGL_DIR}" BUILD_IN_SOURCE 1
+  CONFIGURE_COMMAND "" INSTALL_COMMAND ""
+  BUILD_COMMAND make NO_DEBUG=1 HAVE_SHADER_CACHE=1
+  BUILD_BYPRODUCTS "${VITAGL_DIR}/libvitaGL.a")
+add_library(vitaGL_lib STATIC IMPORTED)
+set_target_properties(vitaGL_lib PROPERTIES IMPORTED_LOCATION "${VITAGL_DIR}/libvitaGL.a")
+add_dependencies(${PROJECT_NAME} vitaGL_vendored)
+set_property(SOURCE ${VZ}/rt/nv2a_pb_exec.c APPEND PROPERTY INCLUDE_DIRECTORIES "${VITAGL_DIR}/source")
 target_link_libraries(${PROJECT_NAME}
   -Wl,--whole-archive pthread -Wl,--no-whole-archive
   SceDisplay_stub SceSysmem_stub ScePower_stub
+  vitaGL_lib vitashark SceShaccCgExt taihen_stub SceShaccCg_stub mathneon
   SceKernelThreadMgr_stub SceIofilemgr_stub SceRtc_stub SceAppUtil_stub SceTouch_stub SceAudio_stub SceAppMgr_stub SceCtrl_stub
-  m)
+  SceGxm_stub SceKernelDmacMgr_stub SceCommonDialog_stub SceDisplay_stub
+  m stdc++)  # stdc++ después de vitaGL: es C++ por dentro
 
 vita_create_self(eboot.bin ${PROJECT_NAME} UNSAFE)
 # ATTRIBUTE2=12: memoria extendida (el bloque guest + la ventana contigua son 176 MB).

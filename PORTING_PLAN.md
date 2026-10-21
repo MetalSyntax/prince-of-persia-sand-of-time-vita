@@ -214,12 +214,32 @@ Fases concretas:
             completo sin símbolos sin resolver: `build/vita-port/pop-sot.vpk` 13 463 422 B (SHA-256
             `5619b48b…`), ELF `.text` 26,1 MB / `.bss` 20,7 MB, heap newlib 256 MB, SFO `ATTRIBUTE2=12`.
             Compilación completa ≈16 min a -j10 (M4). Solo compila: **no** probado en consola.
+- [x] (2026-10-20) **Prueba previa en ARM32 sin consola (`port/vita/hosttest/`)**: el mismo programa
+      (vvm, vitaize, C generado, host Vita) compilado para Linux armv7 (`-DHOSTTEST=ON`, psp2 falso en
+      `hosttest/psp2_fake.c`) y ejecutado en Docker `linux/arm/v7`: `port/vita/hosttest/run.sh build|run`.
+      Capturas PPM en `build/hosttest-data/logs/frames/`, crash → `[CRASH] pc/lr` + registros guest.
+      No mide rendimiento (CPU emulada). Bugs encontrados y corregidos con él:
+      1. `guest_vmem_free` limpiaba páginas con `H + va` crudo → `vitaize` (crash `memset` en `0xB9765000`).
+      2. `scene.c` (logs de Jade) leía `base + va` crudo → `vitaize` (crash `read_name`).
+      3. Páginas EXT_VMA comprometidas por separado no eran contiguas en el host → arena lineal en
+         `vvm.c` (`VVM_EXT_ARENA_MB`, 64 en Vita; pico medido 18,5 MB hasta el menú).
+      4. Sin APU el motor crashea tras cargar (documentado en `xbox_memory_layout.c`) → APU emulada con
+         accesores MMIO en el DirectSound generado (`compat/mmio_vita.[ch]`, `trap_mmio` en vitaize,
+         5 345 accesos) + `RECOMP_AC97_READY=1`, `RECOMP_APU_DSP_ACK=gp+0x810` como Android.
+      5. Overlay PVIDEO (vídeos Bink) solo existía en `fb_present.c` → portado a `fb_vita.c`; sin él, el
+         D3D del juego espera en bucle a que `BUFFER` vuelva a 0 tras cada vídeo.
+      6. Pilas: `pthread_create` sin atributos da 32 KB en VitaSDK → `_pthread_stack_default_user` 1 MB;
+         mínimo de `CreateThread` 8 MB (Android) → 1 MB (marco máx. medido 4 KB en Thumb-2).
+      Resultado (15 min, `run 900`): sin crash; intro Ubisoft y logo POP TEAM visibles con colores
+      correctos, mundos `MenuBoot` → `menu3D` + Prince cargados; el menú 3D se rasteriza (1 813 draws,
+      156 K triángulos) pero a decenas de s por cuadro bajo emulación.
 - [ ] V0.2 Prueba de kernel: hilos guest, vblank 60 Hz por timer, `KeSetEvent` → el juego llega al checking de
       discs / dibuja algo por software en un framebuffer → blit a la pantalla.
       Hito: **cartel/logo o pantalla del juego visible** en la consola.
       Implementado sin verificar: hilos por `CreateThread`→pthread del runtime, vblank de upstream
       (`RECOMP_VBLANK=1`), `fb_vita.c` (sceDisplay, sin vitaGL), rasterizador software (`RECOMP_HW=0`).
-- [ ] V0.3 Audio: `dsound_device`/WMA → SceAudio (decodificar WMA es igual que en Android).
+- [ ] V0.3 Audio (2026-10-20: APU emulada activa por accesores MMIO; la primera escritura APU llega
+      al modelo en hosttest. Falta oírlo en consola): `dsound_device`/WMA → SceAudio (decodificar WMA es igual que en Android).
       `audio_vita.c` (xa2_* → SceAudio) hecho, pero la APU emulada de upstream depende de trampas de página
       (AC'97/APU) que en Vita no saltan (`VirtualProtect` es no-op): **sin sonido** hasta resolverlo
       (opción: `kuKernelRegisterExceptionHandler` de kubridge, o accesores explícitos en `vvm_ptr`).
@@ -228,6 +248,20 @@ Fases concretas:
       `input_vita.c` hecho con ese mapeo + táctil trasero izq./der. = Black/White; sin verificar.
 - [ ] ⛔ **GATE 3R.1:** el juego arranca en la consola hasta el menú (aun a 1–5 fps, con el rasterizador
       software de respaldo o un framebuffer parcial) sin crashear y con logs legibles.
+- [x] (2026-10-20) **V1.1 + V1.2 backend GPU sobre vitaGL** (`port/vita/src/nv2a_hw_vita.inc`): la interfaz
+      `ng_*` del encoder de Android sobre vitaGL, incluida por la copia vitaizada de `nv2a_hw_d3d11.inc`
+      (estado NV2A, superficies, decodificador de texturas y despacho compartidos). Combiners: un fragment
+      shader **generado por estado** (control words resueltos; el uber shader de upstream sería caro en la
+      GPU de la Vita). Vertex programs **en la GPU**: cada programa se traduce una vez con
+      `nv2a_vsh_emit_hlsl` de upstream (ajustes HLSL→CG/GLSL en `vg_fix_hlsl`). Vídeos Bink por el
+      overlay compuesto en GL. CG en la Vita, GLSL 1.20 en hosttest (Mesa llvmpipe, `RESOT_HW_GLSL`).
+      vitaGL **vendorizado** (`port/vita/vendor/vitaGL`, árbol de Skater Nation; `NO_DEBUG=1
+      HAVE_SHADER_CACHE=1`). Evidencia hosttest (2 min, saltando vídeos con `HOSTTEST_PAD`): intro y logos,
+      pantalla legal, y **menú principal 3D renderizado** (jungla con niebla, texturas, «Start New Game…»)
+      a ~260 draws/cuadro; sin vertex programs en GPU el menú no llegaba a hacer flips.
+      Pendiente en consola: orientación de los render targets (`RECOMP_VITA_RT_FLIP` en
+      `ux0:data/pop-sot/env.txt`), memoria de vitaGL, rendimiento. Huecos: sin color de mezcla
+      constante (vitaGL no tiene glBlendColor), visibilidad aproximada, sin Hor+ (4:3).
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

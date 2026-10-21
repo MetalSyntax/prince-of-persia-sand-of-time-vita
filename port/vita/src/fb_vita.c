@@ -8,6 +8,8 @@
  * el backend GPU propio es V1.1.
  */
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 
@@ -96,10 +98,132 @@ static void grab(uint32_t fb_va, uint32_t pitch)
     pthread_mutex_unlock(&s_frame_lock);
 }
 
+/* ── overlay de vídeo (PVIDEO): los Bink del juego ────────────
+ * Lo de video/fb_present.c (overlay_tick/overlay_latch), que en Vita no se
+ * compila: el decodificador Bink del juego deja cuadros YUY2 en la memoria
+ * contigua y programa los registros PVIDEO del NV2A. Además de mostrarlos,
+ * hay que contestar STOP borrando BUFFER: el D3D del juego espera en bucle a
+ * que BUFFER vuelva a 0 al cerrar un vídeo. */
+#define NV_REG_BASE            0xFD000000u
+#define NV_PVIDEO_BUFFER       0x008700u
+#define NV_PVIDEO_STOP         0x008704u
+#define NV_PVIDEO_BASE(i)      (0x008900u + (i) * 4u)
+#define NV_PVIDEO_OFFSET(i)    (0x008920u + (i) * 4u)
+#define NV_PVIDEO_SIZE_IN(i)   (0x008928u + (i) * 4u)
+#define NV_PVIDEO_POINT_OUT(i) (0x008948u + (i) * 4u)
+#define NV_PVIDEO_SIZE_OUT(i)  (0x008950u + (i) * 4u)
+#define NV_PVIDEO_FORMAT(i)    (0x008958u + (i) * 4u)
+
+static int s_ovl_active;
+
+static volatile uint32_t *guest32(uint32_t va)
+{
+    return (volatile uint32_t *)vvm_ptr(va + (uint32_t)g_xbox_mem_offset);
+}
+static uint32_t nv_reg(uint32_t reg) { return *guest32(NV_REG_BASE + reg); }
+
+static uint8_t clamp8(int v) { return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v); }
+
+/* -> A8B8G8R8 como s_frame */
+static uint32_t yuv_to_abgr(int y, int u, int v)
+{
+    int c = 298 * (y - 16), d = u - 128, e = v - 128;
+    return 0xFF000000u | ((uint32_t)clamp8((c + 516 * d + 128) >> 8) << 16)
+         | ((uint32_t)clamp8((c - 100 * d - 208 * e + 128) >> 8) << 8)
+         |  (uint32_t)clamp8((c + 409 * e + 128) >> 8);
+}
+
+/* El cuadro de vídeo a su resolución (bytes RGBA, como s_frame) y dónde va. */
+static uint32_t *s_ovl;
+static uint32_t s_ovl_w, s_ovl_h, s_ovl_rect[4], s_ovl_serial;
+static volatile int s_hw_mode;   /* el backend vitaGL tiene la pantalla */
+
+static void overlay_latch(int buf)
+{
+    uint32_t size_in = nv_reg(NV_PVIDEO_SIZE_IN(buf)), format = nv_reg(NV_PVIDEO_FORMAT(buf));
+    uint32_t w = size_in & 0x7FFu, h = (size_in >> 16) & 0x7FFu, pitch = format & 0xFFFFu;
+    uint32_t addr = (nv_reg(NV_PVIDEO_BASE(buf)) + nv_reg(NV_PVIDEO_OFFSET(buf))) & 0x0FFFFFFFu;
+    uint32_t po = nv_reg(NV_PVIDEO_POINT_OUT(buf)), so = nv_reg(NV_PVIDEO_SIZE_OUT(buf));
+    uint32_t ox = po & 0xFFFu, oy = (po >> 16) & 0xFFFu, ow = so & 0xFFFu, oh = (so >> 16) & 0xFFFu;
+    int yuy2 = (format >> 16) & 1;     /* 1: Y0 U Y1 V, 0: U Y0 V Y1 */
+    uint32_t x, y;
+
+    if (!w || !h || !ow || !oh || pitch < w * 2 || addr >= 0x04000000u) return;
+    if (!s_ovl_active)
+        fprintf(stderr, "[FB] overlay de vídeo: %ux%u %s en 0x%08X -> %ux%u+%u+%u\n",
+                w, h, yuy2 ? "YUY2" : "UYVY", 0x80000000u | addr, ow, oh, ox, oy);
+    s_ovl_active = 1;
+    pthread_mutex_lock(&s_frame_lock);
+    if (w != s_ovl_w || h != s_ovl_h || !s_ovl) {
+        free(s_ovl);
+        s_ovl = (uint32_t *)malloc((size_t)w * h * 4);
+        s_ovl_w = s_ovl ? w : 0; s_ovl_h = s_ovl ? h : 0;
+    }
+    if (s_ovl) {
+        for (y = 0; y < h; y++) {
+            /* la base es física: la ventana contigua es su vista (una sola reserva) */
+            const uint8_t *row = (const uint8_t *)guest32(0x80000000u | (addr + y * pitch));
+            uint32_t *d = &s_ovl[y * w];
+            for (x = 0; x + 1 < w; x += 2) {
+                const uint8_t *p = row + x * 2;
+                int u = yuy2 ? p[1] : p[0], v = yuy2 ? p[3] : p[2];
+                d[x]     = yuv_to_abgr(yuy2 ? p[0] : p[1], u, v);
+                d[x + 1] = yuv_to_abgr(yuy2 ? p[2] : p[3], u, v);
+            }
+        }
+        s_ovl_rect[0] = ox; s_ovl_rect[1] = oy; s_ovl_rect[2] = ow; s_ovl_rect[3] = oh;
+        s_ovl_serial++;
+        if (!s_hw_mode) {   /* por software: escalado dentro del cuadro del juego */
+            for (y = 0; y < oh && oy + y < SRC_H; y++) {
+                const uint32_t *src = &s_ovl[(y * h / oh) * w];
+                uint32_t *d = &s_frame[(oy + y) * SRC_W];
+                for (x = 0; x < ow && ox + x < SRC_W; x++) d[ox + x] = src[x * w / ow];
+            }
+            s_frame_serial++;
+        }
+    }
+    pthread_mutex_unlock(&s_frame_lock);
+}
+
+/* fb_present.c: el cuadro de vídeo para quien compone la pantalla (nv2a_hw_vita.inc). */
+int xbox_FramebufferOverlayGet(const uint32_t **px, uint32_t *w, uint32_t *h, uint32_t rect[4], uint32_t *serial)
+{
+    if (!s_ovl_active || !s_ovl || !s_ovl_rect[2] || !s_ovl_rect[3]) return 0;
+    *px = s_ovl; *w = s_ovl_w; *h = s_ovl_h;
+    memcpy(rect, s_ovl_rect, sizeof s_ovl_rect);
+    *serial = s_ovl_serial;
+    return 1;
+}
+
+static void overlay_tick(void)
+{
+    volatile uint32_t *buffer = guest32(NV_REG_BASE + NV_PVIDEO_BUFFER);
+    volatile uint32_t *stop = guest32(NV_REG_BASE + NV_PVIDEO_STOP);
+    uint32_t use = *buffer;
+    if (*stop & 1u) {
+        *buffer = 0;
+        *stop = 0;
+        if (s_ovl_active) fprintf(stderr, "[FB] overlay de vídeo apagado\n");
+        s_ovl_active = 0;
+        return;
+    }
+    if (use & 0x01u)      overlay_latch(0);
+    else if (use & 0x10u) overlay_latch(1);
+    else                  s_ovl_active = 0;
+}
+
 /* Hilo principal: escala el último frame si hay uno nuevo. */
 void vita_fb_pump(void)
 {
     int y, x;
+    if (g_xbox_mem_offset) overlay_tick();
+    if (s_hw_mode) {
+        /* vitaGL tiene la pantalla; un juego que no hace flips (un vídeo, una
+         * carga) se repinta desde aquí, como el hilo de ventana de fb_present.c */
+        extern void nv2a_hw_idle_present(void);
+        nv2a_hw_idle_present();
+        return;
+    }
     if (s_shown_serial == s_frame_serial) return;
     pthread_mutex_lock(&s_frame_lock);
     for (y = 0; y < SCR_H; y++) {
@@ -130,7 +254,6 @@ int  xbox_FramebufferVSync(void) { return 1; }
 void xbox_SetPostProcessing(int enabled) { (void)enabled; }
 int  xbox_FramebufferPostProcessing(void) { return 0; }
 void xbox_SetFrameLimit(int fps) { (void)fps; }
-void xbox_SetRenderScalePercent(int percent) { (void)percent; }
 void xbox_FramebufferLimitFrame(void) {}
 int  xbox_FramebufferDeferPresent(void) { return 0; }
 void xbox_FramebufferSetOptionsCallbacks(int (*panel)(const uint32_t **, uint32_t *, uint32_t *),
@@ -139,8 +262,9 @@ void xbox_FramebufferSetOptionsCallbacks(int (*panel)(const uint32_t **, uint32_
 void xbox_FramebufferSetWowProvider(void (*provider)(char *, size_t)) { (void)provider; }
 int  xbox_FramebufferDebugPanelGet(const uint32_t **pixels, uint32_t *width, uint32_t *height)
 { (void)pixels; (void)width; (void)height; return 0; }
-void *xbox_FramebufferWindowHandle(void) { return NULL; }
-void xbox_FramebufferWindowHwMode(int on) { (void)on; }
+/* hw_init() espera una ventana; en la Vita la pantalla entera hace de ventana */
+void *xbox_FramebufferWindowHandle(void) { return (void *)s_screen; }
+void xbox_FramebufferWindowHwMode(int on) { s_hw_mode = on; }
 void xbox_FramebufferHostKey(int vk, int down) { (void)vk; (void)down; }
 void xbox_FramebufferHostMouse(int dx, int dy) { (void)dx; (void)dy; }
 void xbox_FramebufferToggleDebugPanel(void) {}
