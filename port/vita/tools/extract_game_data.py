@@ -86,22 +86,21 @@ class FtpDest:
         self.ftp.connect(host, int(port or 1337), timeout=60)
         self.ftp.login()
         self.dirs = set()
+        self.listings = {}
 
     def size(self, rel):
         d, _, name = (self.BASE + "/" + rel).rpartition("/")
-        try:
-            for line in self._list(d):
-                f = line.split(None, 8)
-                if len(f) == 9 and f[8] == name:
-                    return int(f[4])
-        except ftplib.error_perm:
-            pass
-        return -1
-
-    def _list(self, d):
-        lines = []
-        self.ftp.retrlines("LIST " + d + "/", lines.append)
-        return lines
+        if d not in self.listings:
+            # VitaShell: ni "LIST <ruta>" ni un CWD absoluto desde una subcarpeta; pasar por "/"
+            lines = []
+            try:
+                self.ftp.cwd("/")
+                self.ftp.cwd(d)
+                self.ftp.retrlines("LIST", lines.append)
+            except ftplib.error_perm:
+                pass
+            self.listings[d] = {f[8]: int(f[4]) for f in (l.split(None, 8) for l in lines) if len(f) == 9}
+        return self.listings[d].get(name, -1)
 
     def put(self, rel, src):
         path = self.BASE + "/" + rel
