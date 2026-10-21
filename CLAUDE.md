@@ -57,7 +57,8 @@ Método y referencias: `../../README.md` y `~/MD/xbox-to-vita-ports.md` (THUG y 
 ./build.sh --vita3k        # + instala el eboot en Vita3K y lo abre (instala el VPK la primera vez)
 ./build.sh --hosttest && port/vita/hosttest/run.sh run 900   # arranque en ARM32 (Docker) antes de la consola
 VITA_IP=<ip> ../../tools/deploy.sh build/vita-port/eboot.bin PSOT00001  # consola (tras instalar el VPK)
-python3 -I port/vita/tools/extract_game_data.py game_data_ntsc ftp://<ip>:1337   # datos a la Vita (1,66 GB;
+python3 -I port/vita/tools/extract_game_data.py game_data_ntsc ftp://<ip>:1337 --movies   # datos + vídeos MP4 a la Vita (1,66 GB +
+                           # movies/; --movies necesita ffmpeg;
                            # o una carpeta local en vez de ftp://). Sin bonus POP1/POP2 ni idiomas 1..4
 python3 -I ../../tools/xbe_info.py game_data/default.xbe --md            # cabecera del XBE
 python3 -I ../../tools/inventory.py game_data                      # inventario de datos

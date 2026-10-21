@@ -346,6 +346,16 @@ Fases concretas:
       etiqueta cada 10 s (`[READ]` escribía una por lectura de disco). CPU en régimen (log_008):
       kernel_timer_thread ~60 %, nv2a_ack_thread ~60 %, game_main ~50 %, APU ~27 %. Sin speedhacks de vitaGL:
       `DRAW_SPEEDHACK` no copia los vértices de cliente y el backend reutiliza su búfer en cada draw.
+- [ ] (2026-10-21) **Vídeos como MP4 (método Halo/THUG):** en consola el Bink recompilado iba a 1–11 fps con el
+      audio entrecortado. `src/movie_vita.c`: si existe `movies/X.mp4`, la rutina de estado de Bink
+      (`sub_0001E970`, ancla en `vitaize.py`) no decodifica: devuelve 1 mientras suena y 0 (EOF) al acabar
+      (en bucle si el indicador 0x00758544 está activo); A/Espacio lo para. El nombre sale de
+      `xbox_translate_path` (ancla en `kernel_path.c`). AvPlayer como Shadow Guardian; el cuadro NV12 va a
+      vitaGL como `VGL_YUV420P_NV12_BT601` (la GPU convierte el color); audio en un puerto VOICE propio.
+      vitaGL deja 8 MB de CDRAM para el decodificador. `extract_game_data.py --movies` convierte con ffmpeg
+      (640x480, H.264 High 4.0 + AAC; ubisoft: 2 MB → 472 KB). `vitaize.py` tenía dos claves `kernel_path.c`
+      (la segunda pisaba la primera): fusionadas. Log con segundos desde el arranque. Sin `DRAW_SPEEDHACK`:
+      haría que la GPU leyera el búfer de vértices de la CPU (sin mapear y reescrito en cada draw).
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

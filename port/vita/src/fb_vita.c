@@ -253,9 +253,14 @@ void vita_gl_idle_tick(void)
     static uint32_t last;
     uint32_t now;
     static uint32_t last_serial;
+    extern int vita_movie_active(void);
+    extern void vita_gl_movie_present(void);
     if (!s_hw_mode) return;
     { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); now = (uint32_t)(ts.tv_sec * 1000u + ts.tv_nsec / 1000000); }
     if (now - last < 16) return;
+#ifdef __vita__
+    if (vita_movie_active()) { last = now; vita_gl_movie_present(); return; }   /* MP4 (movie_vita.c) */
+#endif
     /* con vídeo, solo si hay un cuadro nuevo (o cada 100 ms): cada compose sube y dibuja */
     if (s_ovl_active && s_ovl_serial == last_serial && now - last < 100) return;
     last = now;

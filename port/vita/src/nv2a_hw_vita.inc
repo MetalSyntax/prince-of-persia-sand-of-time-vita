@@ -85,6 +85,8 @@ typedef struct { uint32_t key, ninputs; uint8_t inputs[8]; GLuint vs; } VgVsp;
 static struct {
     int active, ysign, gpu_vsh;
     int gl_thread;   /* el de vglInit: vitaGL no admite GL desde otro */
+    GLuint movie;    /* cuadro NV12 del MP4 (movie_vita.c) */
+    int movie_ok;
     VgVsp vsp[VG_MAX_VSP];
     uint32_t nvsp;
     VgSurface surfaces[HW_MAX_SURFACES], *front, *largest;
@@ -473,6 +475,20 @@ static void vg_blit(GLuint tex, float x, float y, float w, float h, float fbw, f
 /* ── init ────────────────────────────────────────────────── */
 
 #if !defined(RESOT_HW_GLSL)
+int vita_movie_active(void);
+int vita_movie_frame(const void **nv12, unsigned *w, unsigned *h);
+static void ng_compose(void);
+static void ng_present(int sync);
+
+/* Hilo de GL (fb_vita.c): con un MP4 en marcha se repinta a su ritmo. */
+void vita_gl_movie_present(void)
+{
+    if (!s_vg.active || !s_hw.ok) return;
+    EnterCriticalSection(&s_hw.lock);
+    if (!s_hw.pending_present) { ng_compose(); ng_present(0); }
+    LeaveCriticalSection(&s_hw.lock);
+}
+
 /* Errores internos de vitaGL/GXM al log del port (vendor/vitaGL: LOG_ERRORS y gxm.c). */
 void vgl_log_hook(const char *fmt, ...)
 {
@@ -525,7 +541,13 @@ static int ng_init(const char *backend)
     vglUseCachedMem(GL_TRUE);
 #endif
     fprintf(stderr, "[HW vita] vglInitExtended (deja 32 MB de RAM al runtime)\n");
+#if defined(RESOT_HW_GLSL)
     if (!vglInitExtended(0, VG_SCREEN_W, VG_SCREEN_H, 32 * 1024 * 1024, VG_MSAA_NONE)) {
+#else
+    /* 8 MB de CDRAM fuera de vitaGL: los cuadros del decodificador de vídeo (movie_vita.c) */
+    if (!vglInitWithCustomThreshold(0, VG_SCREEN_W, VG_SCREEN_H, 32 * 1024 * 1024, 8 * 1024 * 1024, 0,
+                                    0x8C6000 /* SCE_KERNEL_MAX_MAIN_CDIALOG_MEM_SIZE, mem_utils.h */, VG_MSAA_NONE)) {
+#endif
         fprintf(stderr, "[HW vita] vglInitExtended falló: rasterizador por software\n");
         return 0;
     }
@@ -1208,6 +1230,31 @@ static void ng_compose(void)
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
+#if !defined(RESOT_HW_GLSL)
+    if (vita_movie_active()) {   /* MP4 en lugar del Bink: ocupa el área 4:3 */
+        const void *yuv;
+        unsigned mw, mh;
+        float aw = ph * (4.0f / 3.0f);
+        if (vita_movie_frame(&yuv, &mw, &mh)) {
+            if (!s_vg.movie) {
+                glGenTextures(1, &s_vg.movie);
+                glBindTexture(GL_TEXTURE_2D, s_vg.movie);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            }
+            glBindTexture(GL_TEXTURE_2D, s_vg.movie);
+            glCompressedTexImage2D(GL_TEXTURE_2D, 0, VGL_YUV420P_NV12_BT601, (GLsizei)mw, (GLsizei)mh, 0,
+                                   (GLsizei)(mw * mh * 3 / 2), yuv);
+            s_vg.movie_ok = 1;
+        }
+        if (s_vg.movie_ok) vg_blit(s_vg.movie, px + (pw - aw) * 0.5f, py, aw, ph, VG_SCREEN_W, VG_SCREEN_H);
+        s_hw.pending_present = 1;
+        return;
+    }
+    s_vg.movie_ok = 0;
+#endif
     if (s_vg.front) {
         /* la fila 0 de la superficie es la fila 0 del guest (arriba) en las dos convenciones */
         vg_blit(s_vg.front->tex, px, py, pw, ph, VG_SCREEN_W, VG_SCREEN_H);

@@ -119,6 +119,24 @@ ANCHORS = {
     "target_hooks.c": [
         # Que use la copia traducida de guest_probe.h (misma carpeta rt/).
         ('#include "../../port/game/guest_probe.h"', '#include "guest_probe.h"'),
+        # Vídeos como MP4 con SceAvPlayer (src/movie_vita.c): la rutina de estado de
+        # Bink no decodifica mientras suena el MP4 (1 = sigue, 0 = EOF, -1 = Bink).
+        ('        fprintf(stderr, "[VIDEO] skipped movie (Space / A)\\n");\n',
+         '        fprintf(stderr, "[VIDEO] skipped movie (Space / A)\\n");\n'
+         '#ifdef __vita__\n        { extern void vita_movie_stop(void); vita_movie_stop(); }\n#endif\n'),
+        ('    sub_0001E970_gen();\n}\n',
+         '#ifdef __vita__\n'
+         '    if (GMEM32(0x0044AA1Cu)) {\n'
+         '        extern int vita_movie_status(int loop);\n'
+         '        int st = vita_movie_status(GMEM32(0x00758544u) != 0);\n'
+         '        if (st >= 0) {\n'
+         '            g_eax = (uint32_t)st;\n'
+         '            g_esp += 4;   /* como la rutina original: ret */\n'
+         '            return;\n'
+         '        }\n'
+         '    }\n'
+         '#endif\n'
+         '    sub_0001E970_gen();\n}\n'),
     ],
     # ARM32 no tiene __int128: (a*b)/c exacto con 32x32 (r1 < c < 2^32, sin desbordes).
     "qemu_shim.h": [
@@ -172,6 +190,10 @@ ANCHORS = {
     "kernel_path.c": [
         ("            ok = ftruncate(fileno(f), (off_t)sectors[p] * 512) == 0;\n",
          "            ok = 1;   /* reSOT Vita: sin reservar; tamaño en vita_partition_length() */\n"),
+        # Qué video\\X.int abre el juego, para su MP4 (src/movie_vita.c).
+        ("translate:\n    {\n",
+         "translate:\n    {\n#ifdef __vita__\n"
+         "        { extern void vita_movie_note_path(const char *); vita_movie_note_path(xbox_path); }\n#endif\n"),
     ],
     "kernel_bridge.c": [
         ("        if (h && h != INVALID_HANDLE_VALUE)\n            GetFileSizeEx(h, &size);\n"

@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include <psp2/io/fcntl.h>
+#include <psp2/kernel/processmgr.h>
 
 #define LMAX 512
 #define HIST 16
@@ -60,7 +61,12 @@ static const char *hist_back(unsigned back)   /* 1 = la última */
 static void emit(const char *line)
 {
     size_t n = strlen(line);
+    char stamp[16];
+    int sn;
     if (over_limit(line)) return;
+    /* segundos desde el arranque: dónde se va el tiempo (arranque, cargas, vídeos) */
+    sn = snprintf(stamp, sizeof stamp, "%7.2f ", (double)sceKernelGetProcessTimeWide() / 1e6);
+    sceIoWrite(s_fd, stamp, sn);
     sceIoWrite(s_fd, line, n);
     sceIoWrite(s_fd, "\n", 1);
     memcpy(s_hist[s_nh % HIST], line, n + 1);
