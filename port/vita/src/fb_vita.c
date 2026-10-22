@@ -255,14 +255,17 @@ void vita_gl_idle_tick(void)
     static uint32_t last_serial;
     extern int vita_movie_active(void);
     extern void vita_gl_movie_present(void);
+    extern int vita_gl_flip_idle(unsigned ms);
     if (!s_hw_mode) return;
     { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); now = (uint32_t)(ts.tv_sec * 1000u + ts.tv_nsec / 1000000); }
     if (now - last < 16) return;
 #ifdef __vita__
     if (vita_movie_active()) { last = now; vita_gl_movie_present(); return; }   /* vídeo Bink por FFmpeg (movie_vita.c) */
 #endif
-    /* con vídeo, solo si hay un cuadro nuevo (o cada 100 ms): cada compose sube y dibuja */
-    if (s_ovl_active && s_ovl_serial == last_serial && now - last < 100) return;
+    /* Con vídeo, solo con cuadro nuevo (o cada 100 ms). Sin vídeo, solo tras 1 s sin flips
+     * (cargas): con fotogramas de ~250 ms, repintar cada 100 ms mostraba superficies a medio
+     * dibujar (destellos, log_015); vitaGL sigue mostrando el último fotograma entero. */
+    if (s_ovl_active ? (s_ovl_serial == last_serial && now - last < 100) : !vita_gl_flip_idle(1000)) return;
     last = now;
     last_serial = s_ovl_serial;
     nv2a_hw_idle_present();

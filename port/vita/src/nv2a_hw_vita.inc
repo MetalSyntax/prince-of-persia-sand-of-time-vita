@@ -503,6 +503,12 @@ void vita_gl_movie_present(void)
     LeaveCriticalSection(&s_hw.lock);
 }
 
+/* Hilo de GL: ¿hace al menos ms milisegundos del último flip del juego? */
+int vita_gl_flip_idle(unsigned ms)
+{
+    return s_vg.active && GetTickCount() - s_hw.last_flip_ms >= ms;
+}
+
 /* Errores internos de vitaGL/GXM al log del port (vendor/vitaGL: LOG_ERRORS y gxm.c). */
 void vgl_log_hook(const char *fmt, ...)
 {
@@ -1556,6 +1562,14 @@ static void ng_flip(void)
                 pick = &s_vg.surfaces[i];
         if (pick) s_vg.front = pick;
         else if (s_vg.largest) s_vg.front = s_vg.largest;
+        {
+            static uint32_t last_front = ~0u;
+            uint32_t f = s_vg.front ? s_vg.front->offset : 0;
+            if (f != last_front)
+                fprintf(stderr, "[HW front] flip %u: muestra 0x%08X %s (presentado 0x%08X)\n", s_hw.frame, f,
+                        pick ? "presentada" : "la más grande", va);
+            last_front = f;
+        }
     }
     s_vg.largest = NULL; s_hw.frame++;
 #if !defined(RESOT_HW_GLSL)

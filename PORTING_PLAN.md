@@ -407,6 +407,14 @@ Fases concretas:
       pase con/sin Z → 1,2 MB por pase y un depth sin inicializar (destellos). Arreglo: depth adjunto una vez por
       superficie y nunca soltado; los pases sin Z solo apagan la prueba. Texturas: contenido comprobado cada 3
       fotogramas.
+- [ ] (2026-10-21) **log_015:** sin fallos de memoria de vitaGL (fuga de depth resuelta); se llega a la cinemática
+      in-game (~4 fps, 300–360 draws, 90–100 mil vértices; `prog` 70–75 ms). VRAM llena (1 KB) pero RAM de vitaGL
+      4–13 MB libre: ya no hay recolecciones forzadas. Siguen los destellos. El ejecutor trabaja 6,4–10 s de cada
+      10; el backend medido explica ~80 de ~250 ms por fotograma. Cambios: (1) sin repintados intermedios: fuera
+      de vídeo, el hilo de GL solo repinta tras 1 s sin flips del juego (antes cada 100 ms, a mitad de fotograma);
+      (2) `[HW front]` cuando cambia la superficie mostrada; (3) perfil por muestreo del ejecutor
+      (`compat/prof_vita.c`, `nv2a_pb_exec.c` con `-finstrument-functions`, `[PROF]` cada 10 s, simbolizar con
+      addr2line). Quitar la instrumentación cuando se haya localizado el coste.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

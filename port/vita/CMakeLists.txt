@@ -197,7 +197,9 @@ if(NOT EXISTS "${FFMPEG_BINK}/lib/libavcodec.a")
 endif()
 set_property(SOURCE src/movie_vita.c APPEND PROPERTY INCLUDE_DIRECTORIES "${FFMPEG_BINK}/include")
 target_link_libraries(${PROJECT_NAME} "${FFMPEG_BINK}/lib/libavformat.a" "${FFMPEG_BINK}/lib/libavcodec.a" "${FFMPEG_BINK}/lib/libavutil.a" z)
-target_sources(${PROJECT_NAME} PRIVATE compat/threads_vita.c compat/log_vita.c src/movie_vita.c)   # solo Vita: [THR], afinidad, log x32, vídeos Bink por FFmpeg
+target_sources(${PROJECT_NAME} PRIVATE compat/threads_vita.c compat/log_vita.c src/movie_vita.c compat/prof_vita.c)
+# Perfil por muestreo del ejecutor NV2A (compat/prof_vita.c, [PROF] en el log)
+set_property(SOURCE ${VZ}/rt/nv2a_pb_exec.c APPEND PROPERTY COMPILE_OPTIONS -finstrument-functions)   # solo Vita: [THR], afinidad, log x32, vídeos Bink por FFmpeg
 target_link_libraries(${PROJECT_NAME}
   -Wl,--whole-archive pthread -Wl,--no-whole-archive
   -Wl,--pic-veneer -Wl,--wrap=recomp_lookup -Wl,--wrap=pthread_create -Wl,--wrap=CreateThread
