@@ -96,8 +96,8 @@ static struct {
     VgTexture textures[HW_MAX_TEXTURES];
     VgProgram *programs[VG_MAX_PROGRAMS];
     uint32_t nprograms;
-    GLuint white, white_cube, blit, overlay;
-    GLint blit_tex;
+    GLuint white, white_cube, blit, overlay, fill;
+    GLint blit_tex, fill_col;
     uint32_t overlay_w, overlay_h, overlay_serial;
     int applied_percent;
     /* visibilidad: área dibujada (píxeles guest) mientras está activa */
@@ -445,36 +445,53 @@ static void vg_blit_init(void)
         "float4 main(float2 v_uv : TEXCOORD0, uniform sampler2D tex) : COLOR {\n"
         "  return float4(tex2D(tex, v_uv).xyz, 1.0); }\n";
 #endif
+    /* Color fijo: clears con máscara (el glClear de vitaGL escribe RGBA sin mirar glColorMask). */
+    static const char fill_src[] =
+#if defined(RESOT_HW_GLSL)
+        "varying float2 v_uv; uniform float4 col;\n"
+        "void main() { gl_FragColor = col; }\n";
+#else
+        "float4 main(uniform float4 col) : COLOR { return col; }\n";
+#endif
     static const char *const attrs[1] = {"a_pos"};
-    char *v = (char *)malloc(sizeof s_vg_prelude + sizeof vs_src), *f = (char *)malloc(sizeof s_vg_prelude + sizeof fs_src);
-    GLuint vs, fs;
+    char *v = (char *)malloc(sizeof s_vg_prelude + sizeof vs_src), *f = (char *)malloc(sizeof s_vg_prelude + sizeof fs_src + sizeof fill_src);
+    GLuint vs, fs, ff;
     strcpy(v, s_vg_prelude); strcat(v, vs_src);
     strcpy(f, s_vg_prelude); strcat(f, fs_src);
     vs = vg_shader(VG_VERTEX_SHADER, v);
     fs = vg_shader(VG_FRAGMENT_SHADER, f);
+    strcpy(f, s_vg_prelude); strcat(f, fill_src);
+    ff = vg_shader(VG_FRAGMENT_SHADER, f);
     free(v); free(f);
     if (!vs || !fs || !(s_vg.blit = vg_link(vs, fs, attrs, 1))) vg_fail("blit shader");
     s_vg.blit_tex = glGetUniformLocation(s_vg.blit, "tex");
+    if (!ff || !(s_vg.fill = vg_link(vs, ff, attrs, 1))) vg_fail("fill shader");
+    s_vg.fill_col = glGetUniformLocation(s_vg.fill, "col");
 }
 
 /* Rectángulo en píxeles del framebuffer (origen arriba a la izquierda) con la
  * textura completa: la fila 0 de la textura va arriba. */
-static void vg_blit(GLuint tex, float x, float y, float w, float h, float fbw, float fbh)
+static void vg_quad(float x, float y, float w, float h, float fbw, float fbh)
 {
     float x0 = 2.0f * x / fbw - 1.0f, x1 = 2.0f * (x + w) / fbw - 1.0f;
     float y0 = 1.0f - 2.0f * y / fbh, y1 = 1.0f - 2.0f * (y + h) / fbh;   /* pantalla: NDC +1 arriba */
     float q[6][4] = {{x0, y0, 0, 0}, {x1, y0, 1, 0}, {x0, y1, 0, 1},
                      {x1, y0, 1, 0}, {x1, y1, 1, 1}, {x0, y1, 0, 1}};
     int i;
-    glUseProgram(s_vg.blit);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glUniform1i(s_vg.blit_tex, 0);
     for (i = 1; i < 16; i++) glDisableVertexAttribArray((GLuint)i);
     glEnableVertexAttribArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 16, q);
     glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
+static void vg_blit(GLuint tex, float x, float y, float w, float h, float fbw, float fbh)
+{
+    glUseProgram(s_vg.blit);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glUniform1i(s_vg.blit_tex, 0);
+    vg_quad(x, y, w, h, fbw, fbh);
 }
 
 /* Perfil por fotograma (línea "[HW vita] ... fps"): µs en cada parte del backend. Lo que
@@ -1429,17 +1446,26 @@ static void ng_clear(uint32_t param)
         glClearStencil((GLint)(s_gpu.zstencil_clear & 255));
         glClear(bits);
     }
-    /* Solo limpiar el búfer de color si se pide limpiar R, G o B (bits 4, 5, 6 = 0x70).
-     * Los clears con param 0x80 / 0x83 solo piden limpiar el canal alfa (bit 7), y en vitaGL
-     * glClear no respeta glColorMask (dibuja un quad opaco) borrando la escena 3D a negro. */
-    if ((param & 0x70) && x1 > x0 && y1 > y0) {
+    if ((param & 0xF0) && x1 > x0 && y1 > y0) {
         float color[4];
         hw_color4(s_gpu.clear_color, color);
         vg_bind_surface(s);
         vg_scissor(s, x0, y0, x1, y1);
-        glColorMask((param & 0x10) != 0, (param & 0x20) != 0, (param & 0x40) != 0, (param & 0x80) != 0);
-        glClearColor(color[0], color[1], color[2], color[3]);
-        glClear(GL_COLOR_BUFFER_BIT);
+        if ((param & 0xF0) == 0xF0) {
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            glClearColor(color[0], color[1], color[2], color[3]);
+            glClear(GL_COLOR_BUFFER_BIT);
+        } else {
+            /* Canales sueltos (el juego limpia solo el alfa, param 0x80/0x83, que usan sus luces):
+             * el glClear de vitaGL ignora glColorMask y borraba la escena a negro; un quad sí lo
+             * respeta. vg_state repone blend/depth/cull/viewport en el siguiente draw. */
+            glViewport(0, 0, (GLsizei)hw_px(s->w, s->sc), (GLsizei)hw_py(s->h, s->sc));
+            glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
+            glColorMask((param & 0x10) != 0, (param & 0x20) != 0, (param & 0x40) != 0, (param & 0x80) != 0);
+            glUseProgram(s_vg.fill);
+            glUniform4fv(s_vg.fill_col, 1, color);
+            vg_quad(0, 0, 1, 1, 1, 1);   /* NDC completo; el scissor recorta */
+        }
     }
     s_gpu.clears++;
 }
