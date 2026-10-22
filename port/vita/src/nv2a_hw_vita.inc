@@ -81,12 +81,11 @@ typedef struct VgProgram {
 
 /* Un vertex program del NV2A traducido (nv2a_vsh_emit_hlsl) a CG/GLSL. */
 #define VG_MAX_VSP 256
-typedef struct { uint32_t key, ninputs, cnum; uint8_t inputs[8]; GLuint vs; } VgVsp;   /* cnum: constantes a subir */
+typedef struct { uint32_t key, ninputs, cnum; uint8_t inputs[16]; GLuint vs; } VgVsp;   /* cnum: constantes a subir */
 
 static struct {
     int active, ysign, gpu_vsh;
     int gl_thread;   /* el de vglInit: vitaGL no admite GL desde otro */
-    VgSurface *pending;   /* terminada en el último flip: se muestra en el siguiente */
     unsigned dxt1_uploads;   /* texturas DXT1 subidas comprimidas */
     GLuint movie;    /* cuadro YUV420P del vídeo Bink (movie_vita.c, FFmpeg) */
     int movie_ok;
@@ -367,7 +366,10 @@ static GLuint vg_link(GLuint vs, GLuint fs, const char *const *attrs, int nattr)
 }
 
 static const char *const s_vg_attrs[8] = {"a_pos", "a_d0", "a_d1", "a_fog", "a_t0", "a_t1", "a_t2", "a_t3"};
-static const char *const s_vg_prog_attrs[8] = {"a_in0", "a_in1", "a_in2", "a_in3", "a_in4", "a_in5", "a_in6", "a_in7"};
+static const char *const s_vg_prog_attrs[16] = {
+    "a_in0", "a_in1", "a_in2", "a_in3", "a_in4", "a_in5", "a_in6", "a_in7",
+    "a_in8", "a_in9", "a_in10", "a_in11", "a_in12", "a_in13", "a_in14", "a_in15"
+};
 
 static VgProgram *vg_program(const VgPsKey *k)
 {
@@ -395,7 +397,7 @@ static VgProgram *vg_program(const VgPsKey *k)
     e = (VgProgram *)calloc(1, sizeof *e);
     if (!e) vg_fail("program allocation");
     e->key = *k; e->hash = h;
-    e->prog = fs ? vg_link(vsx, fs, k->vsp ? s_vg_prog_attrs : s_vg_attrs, 8) : 0;
+    e->prog = fs ? vg_link(vsx, fs, k->vsp ? s_vg_prog_attrs : s_vg_attrs, k->vsp ? 16 : 8) : 0;
     if (fs) glDeleteShader(fs);
     if (e->prog) {
         e->u_vp = glGetUniformLocation(e->prog, "vp");
@@ -468,7 +470,7 @@ static void vg_blit(GLuint tex, float x, float y, float w, float h, float fbw, f
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex);
     glUniform1i(s_vg.blit_tex, 0);
-    for (i = 1; i < 8; i++) glDisableVertexAttribArray((GLuint)i);
+    for (i = 1; i < 16; i++) glDisableVertexAttribArray((GLuint)i);
     glEnableVertexAttribArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 16, q);
@@ -529,29 +531,41 @@ void vgl_gxm_error_hook(const char *what, int code)
 }
 #endif
 
+#define VG_MAX_BATCH_VERTS 8192
+static float *s_vg_scratch_verts;
+static uint16_t *s_vg_scratch_idx;
+
 static int ng_init(const char *backend)
 {
     static const uint32_t white[6] = {~0u, ~0u, ~0u, ~0u, ~0u, ~0u};
     const char *flip = getenv("RECOMP_VITA_RT_FLIP");
     int f;
     (void)backend;
-    /* Los vértices transformados por la CPU (24 MB): solo los lee la CPU (vitaGL los
-     * copia en cada draw), así que van en un bloque propio con caché, pedido antes que
-     * vitaGL para que su reparto los cuente. Ni malloc (heap de newlib, 48 MB) ni
-     * vglAlloc(VGL_MEM_RAM): el mspace de vitaGL no da 24 MB de una vez aunque tenga
-     * 66 MB libres (log_003 de consola, 2026-10-21). */
+    /* Búfer de vértices del rasterizador por CPU (1 MB para 8192 vértices, en vez de 24 MB)
+     * y búfer de trabajo para VBO/batch (2 MB en bloque propio, sin agotar el heap de newlib). */
 #if defined(RESOT_HW_GLSL)
-    s_hw.verts = (HwVertex *)malloc(sizeof(HwVertex) * HW_MAX_VERTS);
+    s_hw.verts = (HwVertex *)malloc(sizeof(HwVertex) * VG_MAX_BATCH_VERTS);
+    s_vg_scratch_verts = (float *)malloc(sizeof(float) * 4 * 16 * VG_MAX_BATCH_VERTS);
+    s_vg_scratch_idx = (uint16_t *)malloc((size_t)VG_MAX_BATCH_VERTS * 6 * sizeof(uint16_t) + 8);
 #else
     {
         void *base = NULL;
-        SceUID blk = sceKernelAllocMemBlock("pop-hw-verts", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW,
-                                            (sizeof(HwVertex) * HW_MAX_VERTS + 0xFFFu) & ~0xFFFu, NULL);
+        size_t sz = (sizeof(HwVertex) * VG_MAX_BATCH_VERTS + 0xFFFu) & ~0xFFFu;
+        SceUID blk = sceKernelAllocMemBlock("pop-hw-verts", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, sz, NULL);
         s_hw.verts = blk >= 0 && sceKernelGetMemBlockBase(blk, &base) >= 0 ? (HwVertex *)base : NULL;
     }
+    {
+        void *base = NULL;
+        size_t sz = (sizeof(float) * 4 * 16 * VG_MAX_BATCH_VERTS + (size_t)VG_MAX_BATCH_VERTS * 6 * sizeof(uint16_t) + 0xFFFu) & ~0xFFFu;
+        SceUID blk = sceKernelAllocMemBlock("pop-batch-scratch", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, sz, NULL);
+        if (blk >= 0 && sceKernelGetMemBlockBase(blk, &base) >= 0) {
+            s_vg_scratch_verts = (float *)base;
+            s_vg_scratch_idx = (uint16_t *)((uint8_t *)base + sizeof(float) * 4 * 16 * VG_MAX_BATCH_VERTS);
+        }
+    }
 #endif
-    if (!s_hw.verts) {
-        fprintf(stderr, "[HW vita] sin memoria para %u vértices: rasterizador por software\n", (unsigned)HW_MAX_VERTS);
+    if (!s_hw.verts || !s_vg_scratch_verts || !s_vg_scratch_idx) {
+        fprintf(stderr, "[HW vita] sin memoria para buffers de vértices: rasterizador por software\n");
         return 0;
     }
     /* 32 MB de RAM quedan para el runtime (pilas de los hilos que el juego crea
@@ -565,8 +579,8 @@ static int ng_init(const char *backend)
      * en la partida quedaban 22 MB sin usar mientras vitaGL se quedaba sin memoria y forzaba
      * recolecciones de segundos (log_011). */
 #if !defined(RESOT_HW_GLSL)
-    /* Pool circular de datos por draw: 12 MB (4 por búfer de pantalla) en vez de 32. Por
-     * fotograma se usan ~2 MB (vértices compactos + constantes) y los 20 MB vuelven a vitaGL. */
+    /* Pool circular de datos por draw: 6 MB (2 por búfer de pantalla) en vez de 32. Por
+     * fotograma se usan ~2 MB (vértices compactos + constantes) y el resto queda para vitaGL. */
     vglSetCircularPoolSize(12 * 1024 * 1024);
 #endif
     fprintf(stderr, "[HW vita] vglInitExtended (deja 16 MB de RAM al runtime)\n");
@@ -624,7 +638,7 @@ static VgSurface *ng_surface(void)
             if (s_vg.depths[i].rb) glDeleteRenderbuffers(1, &s_vg.depths[i].rb);
         memset(s_vg.surfaces, 0, sizeof s_vg.surfaces);
         memset(s_vg.depths, 0, sizeof s_vg.depths);
-        s_vg.front = s_vg.largest = s_vg.pending = NULL;
+        s_vg.front = s_vg.largest = NULL;
         s_vg.applied_percent = percent;
     }
     if (!s_gpu.color_offset || !bpp || !s_gpu.pitch) return NULL;
@@ -642,7 +656,6 @@ static VgSurface *ng_surface(void)
     if (!out) out = old;
     if (out->fbo) { glDeleteFramebuffers(1, &out->fbo); glDeleteTextures(1, &out->tex); }
     if (s_vg.front == out) s_vg.front = NULL;
-    if (s_vg.pending == out) s_vg.pending = NULL;
     if (s_vg.largest == out) s_vg.largest = NULL;
     memset(out, 0, sizeof *out);
     out->offset = off; out->w = w; out->h = h; out->sc = hw_surface_scale(w);
@@ -1134,14 +1147,15 @@ static uint32_t vg_vsp_get(const uint8_t *inputs, uint32_t ninputs)
     }
     vg_emit(&b, "%s%s", s_vg_prelude, s_vg_vsp_helpers);
 #if defined(RESOT_HW_GLSL)
-    vg_emit(&b, "attribute float4 a_in0, a_in1, a_in2, a_in3, a_in4, a_in5, a_in6, a_in7;\n"
-                "uniform float4 c[192];\nuniform float4 vp, ws, fogp;\n"
+    vg_emit(&b, "attribute float4 ");
+    for (i = 0; i < ninputs; i++) vg_emit(&b, "a_in%u%s", i, (i + 1 < ninputs) ? ", " : ";\n");
+    vg_emit(&b, "uniform float4 c[192];\nuniform float4 vp, ws, fogp;\n"
                 "varying float4 v_d0, v_d1, v_fog, v_t0, v_t1, v_t2, v_t3;\n"
                 "void main() {\n");
 #else
-    vg_emit(&b, "void main(float4 a_in0, float4 a_in1, float4 a_in2, float4 a_in3,\n"
-                "  float4 a_in4, float4 a_in5, float4 a_in6, float4 a_in7,\n"
-                "  uniform float4 c[192], uniform float4 vp, uniform float4 ws, uniform float4 fogp,\n"
+    vg_emit(&b, "void main(\n");
+    for (i = 0; i < ninputs; i++) vg_emit(&b, "  float4 a_in%u,\n", i);
+    vg_emit(&b, "  uniform float4 c[192], uniform float4 vp, uniform float4 ws, uniform float4 fogp,\n"
                 "  float4 out gl_Position : POSITION, float4 out v_t0 : TEXCOORD0, float4 out v_t1 : TEXCOORD1,\n"
                 "  float4 out v_t2 : TEXCOORD2, float4 out v_t3 : TEXCOORD3, float4 out v_d0 : TEXCOORD4,\n"
                 "  float4 out v_d1 : TEXCOORD5, float4 out v_fog : TEXCOORD6) {\n");
@@ -1196,17 +1210,17 @@ static uint32_t s_vc_bytes, s_vc_hits, s_vc_builds;
 
 static int vg_vcache_draw(uint32_t n, const uint8_t *inputs, uint32_t ninputs, uint32_t vsp)
 {
-    static float *build;
-    static uint16_t *idx;
+    float *build = s_vg_scratch_verts;
+    uint16_t *idx = s_vg_scratch_idx;
     const uint8_t *mem = (const uint8_t *)xbox_GetMemoryOffset();
     uint32_t imin = 0xFFFFu, imax = 0, i, a, k, span, key = 2166136261u, hash = 2166136261u, ni = 0;
     VgVCache *e = NULL, *victim = NULL;
     VgSurface *s;
     VgProgram *p;
-    if (s_gpu.inline_active) return 0;
+    if (s_gpu.inline_active || n > VG_MAX_BATCH_VERTS) return 0;
     for (i = 0; i < n; i++) { uint32_t ix = s_gpu.idx[i]; if (ix < imin) imin = ix; if (ix > imax) imax = ix; }
     span = imax - imin + 1;
-    if (span > 4 * n + 64) return 0;   /* rango disperso: no compensa */
+    if (span > 4 * n + 64 || span > VG_MAX_BATCH_VERTS) return 0;   /* rango disperso: no compensa */
     for (a = 0; a < ninputs; a++) {
         const VertexAttr *at = &s_gpu.attr[inputs[a]];
         if (!at->size || !at->stride || !at->offset) return 0;   /* valor fijo de SET_VERTEX_DATA */
@@ -1229,10 +1243,6 @@ static int vg_vcache_draw(uint32_t n, const uint8_t *inputs, uint32_t ninputs, u
             if (e->vbo && s_hw.frame - e->used < VC_IDLE && s_vc_bytes + bytes > VC_BUDGET) return 0;
         }
         if (s_vc_bytes - e->bytes + bytes > VC_BUDGET) return 0;   /* sin presupuesto: ruta normal */
-        if (!build) {
-            build = (float *)malloc(sizeof(float) * 4 * 8 * NV_MAX_INDICES);
-            if (!build) return 0;
-        }
         for (i = 0; i < span; i++)
             for (a = 0; a < ninputs; a++) fetch_attr(&s_gpu.attr[inputs[a]], imin + i, &build[(i * ninputs + a) * 4]);
         if (!e->vbo) glGenBuffers(1, &e->vbo);
@@ -1246,7 +1256,6 @@ static int vg_vcache_draw(uint32_t n, const uint8_t *inputs, uint32_t ninputs, u
         s_vc_hits++;
     }
     e->used = s_hw.frame;
-    if (!idx && !(idx = (uint16_t *)malloc((size_t)NV_MAX_INDICES * 6 + 8))) return 0;
 #define VC_IDX(x, y, z) do { idx[ni] = (uint16_t)(s_gpu.idx[x] - imin); idx[ni + 1] = (uint16_t)(s_gpu.idx[y] - imin); \
         idx[ni + 2] = (uint16_t)(s_gpu.idx[z] - imin); ni += 3; } while (0)
     switch (s_gpu.prim) {
@@ -1265,7 +1274,7 @@ static int vg_vcache_draw(uint32_t n, const uint8_t *inputs, uint32_t ninputs, u
             glUniform4fv(p->u_c, (GLsizei)s_vg.vsp[vsp - 1].cnum, nv2a_vsh_constants()); p->cgen = cgen; }
         if (p->u_fogp >= 0) glUniform4fv(p->u_fogp, 1, fogp);
         glBindBuffer(GL_ARRAY_BUFFER, e->vbo);
-        for (a = 0; a < 8; a++) {
+        for (a = 0; a < 16; a++) {
             if (a < ninputs) {
                 glEnableVertexAttribArray(a);
                 glVertexAttribPointer(a, 4, GL_FLOAT, GL_FALSE, (GLsizei)(ninputs * 16), (const void *)(uintptr_t)(a * 16));
@@ -1302,14 +1311,14 @@ static int ng_draw_program_batch(void)
 {
     static uint32_t stamp[65536], batch_id;
     static uint16_t remap[65536];
-    static float *verts;   /* compacto: ninputs float4 por vértice (antes 8, 128 B) */
-    static uint16_t *idx;
+    float *verts = s_vg_scratch_verts;
+    uint16_t *idx = s_vg_scratch_idx;
     const uint32_t *words;
     const uint8_t *inputs;
     uint32_t ninputs, n = s_gpu.idx_count, i, a, nv = 0, ni = 0, vsp;
     VgSurface *s;
     VgProgram *p;
-    if (!s_vg.gpu_vsh || n < 3 || n > NV_MAX_INDICES) return 0;
+    if (!s_vg.gpu_vsh || n < 3 || n > VG_MAX_BATCH_VERTS) return 0;
     switch (s_gpu.prim) {
     case NV_PRIM_TRIANGLES: case NV_PRIM_TRIANGLE_STRIP: case NV_PRIM_TRIANGLE_FAN:
     case NV_PRIM_POLYGON: case NV_PRIM_QUADS: case NV_PRIM_QUAD_STRIP:
@@ -1318,7 +1327,7 @@ static int ng_draw_program_batch(void)
         return 1;                           /* puntos y líneas: ningún camino los dibuja */
     }
     if (!nv2a_vsh_pack_gpu(&words, &inputs, &ninputs)) { s_prof.rej_pack++; return 0; }
-    if (!ninputs || ninputs > 8) { s_prof.rej_inputs++; return 0; }
+    if (!ninputs || ninputs > 16) { s_prof.rej_inputs++; return 0; }
     /* La composición del glow (como ng_draw_program_batch de Android). */
     if (hw_postprocess_candidate(n)) {
         Nv2aVshOutput post[4];
@@ -1332,11 +1341,6 @@ static int ng_draw_program_batch(void)
     }
     s_hw.batch_full_width = s_hw.batch_projected_screen = s_hw.batch_hud = 0;
     s_hw.batch_projected_2d = 0;   /* ponytail: sin Hor+ (aspect 4:3); con 16:9 hay que clasificar como Android */
-    if (!verts) {
-        verts = malloc(sizeof(float) * 4 * 8 * NV_MAX_INDICES);
-        idx = malloc((size_t)NV_MAX_INDICES * 6 + 8);
-        if (!verts || !idx) vg_fail("program batch buffers");
-    }
     EnterCriticalSection(&s_hw.lock);
     if (!(vsp = vg_vsp_get(inputs, ninputs))) { s_prof.rej_vsp++; LeaveCriticalSection(&s_hw.lock); return 0; }
 #if !defined(RESOT_HW_GLSL)
@@ -1382,7 +1386,7 @@ static int ng_draw_program_batch(void)
         if (p->u_c >= 0 && p->cgen != cgen) {   /* solo las que usa el programa (antes 192 = 3 KB por draw) */
             glUniform4fv(p->u_c, (GLsizei)s_vg.vsp[vsp - 1].cnum, nv2a_vsh_constants()); p->cgen = cgen; }
         if (p->u_fogp >= 0) glUniform4fv(p->u_fogp, 1, fogp);
-        for (a = 0; a < 8; a++) {
+        for (a = 0; a < 16; a++) {
             if (a < ninputs) {
                 glEnableVertexAttribArray(a);
                 glVertexAttribPointer(a, 4, GL_FLOAT, GL_FALSE, (GLsizei)(ninputs * 16), &verts[a * 4]);
@@ -1425,7 +1429,10 @@ static void ng_clear(uint32_t param)
         glClearStencil((GLint)(s_gpu.zstencil_clear & 255));
         glClear(bits);
     }
-    if ((param & 0xF0) && x1 > x0 && y1 > y0) {
+    /* Solo limpiar el búfer de color si se pide limpiar R, G o B (bits 4, 5, 6 = 0x70).
+     * Los clears con param 0x80 / 0x83 solo piden limpiar el canal alfa (bit 7), y en vitaGL
+     * glClear no respeta glColorMask (dibuja un quad opaco) borrando la escena 3D a negro. */
+    if ((param & 0x70) && x1 > x0 && y1 > y0) {
         float color[4];
         hw_color4(s_gpu.clear_color, color);
         vg_bind_surface(s);
@@ -1433,7 +1440,6 @@ static void ng_clear(uint32_t param)
         glColorMask((param & 0x10) != 0, (param & 0x20) != 0, (param & 0x40) != 0, (param & 0x80) != 0);
         glClearColor(color[0], color[1], color[2], color[3]);
         glClear(GL_COLOR_BUFFER_BIT);
-        ng_mark(s);
     }
     s_gpu.clears++;
 }
@@ -1455,6 +1461,7 @@ static void ng_compose_body(void)
     if (pw > VG_SCREEN_W) { pw = VG_SCREEN_W; ph = VG_SCREEN_W / s_hw.aspect; py = (VG_SCREEN_H - ph) * 0.5f; }
     px = (VG_SCREEN_W - pw) * 0.5f;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glFinish();
     vg_bind_surface(&(VgSurface){0});   /* la caché ya no vale */
     glViewport(0, 0, VG_SCREEN_W, VG_SCREEN_H);
     glDisable(GL_SCISSOR_TEST); glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
@@ -1552,18 +1559,8 @@ static void ng_flip(void)
     DWORD now;
     if (s_hw.pending_present) nv2a_hw_flush_present();
     EnterCriticalSection(&s_hw.lock);
-    /* La superficie más grande dibujada en el fotograma, como upstream (hw_flip). El
-     * drawn_offset de xbox_FramebufferWindowSet no sigue los búferes de este juego: se quedaba
-     * en 0x80104000 y la pantalla salía negra (log_016). */
-    /* Se muestra la superficie terminada en el flip ANTERIOR. Muestrear un render target en
-     * el mismo fotograma de vitaGL en que se dibujó da negro (log_021: la superficie tenía
-     * la escena, centro 0x253845, y la pantalla salía negra; un fotograma después se veía).
-     * El juego usa triple búfer: esa superficie ya está completa y no la toca. */
-    {
-        VgSurface *done = s_vg.largest ? s_vg.largest : s_vg.pending;
-        if (s_vg.pending) s_vg.front = s_vg.pending;
-        s_vg.pending = done;
-    }
+    /* La superficie más grande dibujada en el fotograma, como upstream (hw_flip). */
+    if (s_vg.largest) s_vg.front = s_vg.largest;
     {
         static uint32_t last_front = ~0u;
         uint32_t f = s_vg.front ? s_vg.front->offset : 0;

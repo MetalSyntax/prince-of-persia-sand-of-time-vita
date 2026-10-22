@@ -57,7 +57,8 @@ set(DSOUND_GEN source/${TARGET_ID}/gen/xdk/dsound/dsound_0000.c source/${TARGET_
 set(VITAIZED
   kernel/xbox_memory_layout.c kernel/kernel_bridge.c kernel/kernel_rtl.c
   kernel/kernel_hal.c kernel/kernel_thunks.c
-  kernel/nv2a_pb_exec.c nv2a/qemu_shim.h apu/apu_shim.h apu/apu_state.h
+  kernel/nv2a_pb_exec.c kernel/nv2a_vsh_interp.h kernel/nv2a_vsh_interp.c
+  nv2a/qemu_shim.h apu/apu_shim.h apu/apu_state.h
   apu/apu_core.c apu/apu_vp.c apu/apu_dsp.c apu/apu_mmio_hook.c
   port/game/recomp_manual.c port/game/guest_probe.h source/${TARGET_ID}/target_hooks.c
   platform/win32_compat.c kernel/guest_vmem.c port/windows/src/scene.c kernel/nv2a_hw_d3d11.inc
@@ -89,7 +90,7 @@ set(RUNTIME_SOURCES
   ${RT}/kernel/kernel_ob.c ${RT}/kernel/kernel_io.c ${RT}/kernel/kernel_crypto.c
   ${VZ}/rt/kernel_thunks.c ${VZ}/rt/kernel_bridge.c ${VZ}/rt/xbox_memory_layout.c
   ${VZ}/rt/guest_vmem.c ${RT}/kernel/icall_feedback.c ${RT}/kernel/recomp_trace.c
-  ${RT}/kernel/nv2a_pb_scan.c ${VZ}/rt/nv2a_pb_exec.c ${RT}/kernel/nv2a_vsh_interp.c
+  ${RT}/kernel/nv2a_pb_scan.c ${VZ}/rt/nv2a_pb_exec.c ${VZ}/rt/nv2a_vsh_interp.c
   ${RT}/kernel/nv2a_combiner.c
   ${RT}/audio/dsound_device.c ${RT}/audio/wma_decoder.c
   ${VZ}/rt/apu_core.c ${VZ}/rt/apu_vp.c ${VZ}/rt/apu_dsp.c ${VZ}/rt/apu_mmio_hook.c

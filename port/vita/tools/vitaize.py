@@ -105,6 +105,10 @@ def translate_offsets(text):
 
 # Accesos crudos que no tienen la forma '(uintptr_t)X + OFF'. Cada ancla debe existir.
 ANCHORS = {
+    "nv2a_vsh_interp.h": [
+        ("#define NV2A_VSH_GPU_INPUTS 8",
+         "#define NV2A_VSH_GPU_INPUTS 16"),
+    ],
     "xbox_memory_layout.c": [
         # La página de kernel falsa vive en la ventana contigua (memoria aparte en Vita).
         ("            ? (void *)kernel_native\n",

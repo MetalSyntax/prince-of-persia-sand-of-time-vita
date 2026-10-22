@@ -39,7 +39,7 @@
  * compat/vvm.c aparte con sceKernelAllocMemBlock, ya con el log abierto: con
  * 256 MB aquí la Vita no tenía memoria y newlib fallaba antes de main, sin log
  * (primer .psp2dmp en consola, 2026-10-20: LR en _init_vita_heap). */
-int _newlib_heap_size_user = 48 * 1024 * 1024;
+int _newlib_heap_size_user = 56 * 1024 * 1024;
 /* pthread_create sin atributos: 32 KB en VitaSDK (1 MB en Android). Los hilos
  * de temporizador del runtime ejecutan código del juego (DPC/APC). */
 unsigned int _pthread_stack_default_user = 1024 * 1024;
