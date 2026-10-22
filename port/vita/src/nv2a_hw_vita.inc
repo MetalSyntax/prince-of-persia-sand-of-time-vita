@@ -705,7 +705,13 @@ static GLuint vg_depth(VgSurface *s)
             rb = depth->rb;
         }
     }
-    if (s->depth != rb) {
+    /* En este vitaGL un renderbuffer no tiene memoria propia: glFramebufferRenderbuffer
+     * descarta el depth oculto del FBO y la siguiente escena reserva otro (gxm.c,
+     * init_depth_stencil_buffer). Cambiar el adjunto en cada pase con/sin Z reservaba
+     * 1,2 MB por pase (VRAM agotada) y estrenaba un depth sin inicializar (parpadeo del
+     * fondo del menú, log_014). Cada superficie recibe su depth una vez y no se suelta;
+     * un pase sin Z solo apaga la prueba de profundidad (vg_state, depth = 0). */
+    if (rb && !s->depth) {
         vg_bind_surface(s);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rb);
@@ -717,7 +723,7 @@ static GLuint vg_depth(VgSurface *s)
         }
         s->depth = rb;
     }
-    return rb;
+    return rb;   /* 0: este pase no usa Z */
 }
 
 static void vg_sampler(VgTexture *c, const Texture *t, GLenum target)
@@ -770,7 +776,8 @@ static GLuint vg_texture_body(int stage, VgSurface *target)
             g->palette == t->palette && g->cube == t->cube && g->levels == t->levels) { c = e; break; }
         if (!victim || !e->tex || (victim->tex && e->used < victim->used)) victim = e;
     }
-    if (c && c->checked == s_hw.frame) { c->used = s_hw.frame; goto bind; }
+    /* el contenido se comprueba cada 3 fotogramas (antes en cada uno: ~15 ms con 125 texturas) */
+    if (c && s_hw.frame - c->checked < 3) { c->used = s_hw.frame; goto bind; }
     hash = hw_tex_hash(t);
     if (c && c->hash == hash) { c->checked = c->used = s_hw.frame; goto bind; }
     /* Misma textura (dirección, tamaño, formato) con contenido nuevo: se actualiza en su sitio.

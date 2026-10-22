@@ -400,6 +400,13 @@ Fases concretas:
       CPU en cada flip) desactivado con vitaGL; caché de vértices en VBO para los batches con vertex programs
       (clave: atributos + rango de índices; huella de 9 muestras por atributo; tope 12 MB; se libera a los 300
       fotogramas sin uso).
+- [ ] (2026-10-21) **log_014:** el fondo del menú ya aparece, pero a destellos; 3,6 fps; `prog` 100→60 ms (caché
+      VBO: 78 conversiones, ~15 800 reusos, 1,3 MB). Siguen reservas de 1200/300 KB (`gxm.c:503`,
+      `init_depth_stencil_buffer`): en este vitaGL los renderbuffers no tienen memoria; `glFramebufferRenderbuffer`
+      descarta el depth oculto del FBO y la escena siguiente reserva otro. `vg_depth` cambiaba el adjunto en cada
+      pase con/sin Z → 1,2 MB por pase y un depth sin inicializar (destellos). Arreglo: depth adjunto una vez por
+      superficie y nunca soltado; los pases sin Z solo apagan la prueba. Texturas: contenido comprobado cada 3
+      fotogramas.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.
