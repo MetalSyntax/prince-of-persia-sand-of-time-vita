@@ -454,6 +454,12 @@ Fases concretas:
       (la escena se dibuja en 0x80104000 en el intervalo 0 y se muestra 0x80104000 en el flip 0) y aun así sale negro.
       Sonda de píxeles (`[HW probe]`, cada 5 s): centro de la superficie justo antes del primer glow aditivo y al
       componer, para saber si la escena llega a la textura y si algo la borra después.
+- [ ] (2026-10-21) **Causa del negro (log_021):** la sonda leyó la escena en la superficie mostrada al componer
+      (centro 0x253845) y aun así la pantalla salía negra. El mismo blit sirve para los vídeos (textura normal), así
+      que lo que falla es muestrear un render target en el mismo fotograma de vitaGL en que se dibujó; un fotograma
+      después se veía (los destellos de log_014/015 eran esos repintados tardíos). Arreglo: en cada flip se muestra la
+      superficie terminada en el flip anterior (triple búfer: ya completa y el juego no la toca); un fotograma de
+      latencia, sin glFinish. Fuera la sonda y la omisión de SRC_ALPHA,ZERO.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

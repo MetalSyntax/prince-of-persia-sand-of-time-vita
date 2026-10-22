@@ -86,6 +86,7 @@ typedef struct { uint32_t key, ninputs, cnum; uint8_t inputs[8]; GLuint vs; } Vg
 static struct {
     int active, ysign, gpu_vsh;
     int gl_thread;   /* el de vglInit: vitaGL no admite GL desde otro */
+    VgSurface *pending;   /* terminada en el último flip: se muestra en el siguiente */
     unsigned dxt1_uploads;   /* texturas DXT1 subidas comprimidas */
     GLuint movie;    /* cuadro YUV420P del vídeo Bink (movie_vita.c, FFmpeg) */
     int movie_ok;
@@ -623,7 +624,7 @@ static VgSurface *ng_surface(void)
             if (s_vg.depths[i].rb) glDeleteRenderbuffers(1, &s_vg.depths[i].rb);
         memset(s_vg.surfaces, 0, sizeof s_vg.surfaces);
         memset(s_vg.depths, 0, sizeof s_vg.depths);
-        s_vg.front = s_vg.largest = NULL;
+        s_vg.front = s_vg.largest = s_vg.pending = NULL;
         s_vg.applied_percent = percent;
     }
     if (!s_gpu.color_offset || !bpp || !s_gpu.pitch) return NULL;
@@ -641,6 +642,7 @@ static VgSurface *ng_surface(void)
     if (!out) out = old;
     if (out->fbo) { glDeleteFramebuffers(1, &out->fbo); glDeleteTextures(1, &out->tex); }
     if (s_vg.front == out) s_vg.front = NULL;
+    if (s_vg.pending == out) s_vg.pending = NULL;
     if (s_vg.largest == out) s_vg.largest = NULL;
     memset(out, 0, sizeof *out);
     out->offset = off; out->w = w; out->h = h; out->sc = hw_surface_scale(w);
@@ -1006,20 +1008,11 @@ static VgProgram *vg_begin_draw(VgSurface **out, uint32_t vsp)
     return p;
 }
 
-static int vg_diag_skip_sa_zero(const char *path);
-static void vg_probe(VgSurface *s, const char *label, uint32_t *last_ms);
 static void ng_draw(const HwVertex *v, uint32_t count)
 {
     VgSurface *s;
     uint32_t i;
     if (!count) return;
-    if (vg_diag_skip_sa_zero("2D")) return;
-    if (count <= 6 && s_gpu.blend_enable && s_gpu.blend_sfactor == 1 && s_gpu.blend_dfactor == 1) {
-        static uint32_t t;
-        float l = 1e9f, r = -1e9f;
-        for (i = 0; i < count; i++) { if (v[i].pos[0] < l) l = v[i].pos[0]; if (v[i].pos[0] > r) r = v[i].pos[0]; }
-        if (l <= 1 && r >= 600) vg_probe(ng_surface(), "antes del glow", &t);
-    }
     if (!vg_begin_draw(&s, 0)) return;
     for (i = 0; i < 8; i++) {
         glEnableVertexAttribArray(i);
@@ -1181,36 +1174,6 @@ static uint32_t vg_vsp_get(const uint8_t *inputs, uint32_t ninputs)
 /* ponytail: diagnóstico de la imagen negra (log_017/018): los draws con mezcla
  * SRC_ALPHA,ZERO (escriben color*alfa y sustituyen lo que había) se omiten 5 s sí, 5 s no,
  * en las tres rutas, y se anotan los primeros ([HW sa0]). Quitar al saber cuál oscurece. */
-/* ponytail: diagnóstico de la imagen negra (log_020): color del centro de una superficie, leído de
- * su FBO una vez cada 5 s por etiqueta (glReadPixels para la GPU: solo ahí). Quitar al resolverlo. */
-static void vg_probe(VgSurface *s, const char *label, uint32_t *last_ms)
-{
-    uint8_t c[4] = {0};
-    DWORD now = GetTickCount();
-    if (!s || !s->fbo || now - *last_ms < 5000) return;
-    *last_ms = now;
-    glBindFramebuffer(GL_FRAMEBUFFER, s->fbo);
-    glReadPixels((GLint)(hw_px(s->w, s->sc) / 2), (GLint)(hw_py(s->h, s->sc) / 2), 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, c);
-    vg_bind_surface(&(VgSurface){0});   /* la caché de vg_bind_surface ya no vale */
-    fprintf(stderr, "[HW probe] flip %u, %s: superficie 0x%08X, centro %02X%02X%02X%02X\n", s_hw.frame, label,
-            s->offset, c[0], c[1], c[2], c[3]);
-}
-
-static int vg_diag_skip_sa_zero(const char *path)
-{
-    static unsigned logged;
-    int skip;
-    if (!(s_gpu.blend_enable && s_gpu.blend_sfactor == 0x302 && s_gpu.blend_dfactor == 0)) return 0;
-    skip = (GetTickCount() / 5000) & 1;
-    if (logged++ < 40)
-        fprintf(stderr, "[HW sa0] flip %u, %s: superficie 0x%08X, tex0 %s0x%08X fmt 0x%X, combiners 0x%08X "
-                "final 0x%08X/0x%08X, color_mask 0x%08X, idx %u%s\n", s_hw.frame, path,
-                (unsigned)dma_resolve(s_gpu.color_offset), s_gpu.texs[0].valid ? "" : "(no) ", s_gpu.texs[0].offset,
-                s_gpu.texs[0].color, s_gpu.rc.control, s_gpu.rc.final0, s_gpu.rc.final1, s_gpu.color_mask,
-                s_gpu.idx_count, skip ? " OMITIDO" : "");
-    return skip;
-}
-
 #if !defined(RESOT_HW_GLSL)
 /* Caché de vértices de los batches con vertex programs (VBO de vitaGL).
  *
@@ -1295,7 +1258,6 @@ static int vg_vcache_draw(uint32_t n, const uint8_t *inputs, uint32_t ninputs, u
     default:                     for (i = 0; i + 3 < n; i += 2) { VC_IDX(i, i + 1, i + 3); VC_IDX(i, i + 3, i + 2); } break;
     }
 #undef VC_IDX
-    if (vg_diag_skip_sa_zero("vertex program (VBO)")) return 1;
     if (ni && (p = vg_begin_draw(&s, vsp)) != NULL) {
         float fogp[4] = { s_gpu.fog_param[0], s_gpu.fog_param[1], (float)s_gpu.fog_mode, s_gpu.fog_enable ? 1.0f : 0.0f };
         uint32_t cgen = nv2a_vsh_constant_generation();
@@ -1413,7 +1375,6 @@ static int ng_draw_program_batch(void)
         break;
     }
 #undef VG_IDX
-    if (vg_diag_skip_sa_zero("vertex program")) { LeaveCriticalSection(&s_hw.lock); return 1; }
     if (ni && (p = vg_begin_draw(&s, vsp)) != NULL) {
         float fogp[4] = { s_gpu.fog_param[0], s_gpu.fog_param[1], (float)s_gpu.fog_mode,
                           s_gpu.fog_enable ? 1.0f : 0.0f };
@@ -1525,7 +1486,6 @@ static void ng_compose_body(void)
     }
     s_vg.movie_ok = 0;
 #endif
-    { static uint32_t t; vg_probe(s_vg.front, "al componer", &t); glBindFramebuffer(GL_FRAMEBUFFER, 0); }
     if (s_vg.front) {
         /* la fila 0 de la superficie es la fila 0 del guest (arriba) en las dos convenciones */
         vg_blit(s_vg.front->tex, px, py, pw, ph, VG_SCREEN_W, VG_SCREEN_H);
@@ -1595,7 +1555,15 @@ static void ng_flip(void)
     /* La superficie más grande dibujada en el fotograma, como upstream (hw_flip). El
      * drawn_offset de xbox_FramebufferWindowSet no sigue los búferes de este juego: se quedaba
      * en 0x80104000 y la pantalla salía negra (log_016). */
-    if (s_vg.largest) s_vg.front = s_vg.largest;
+    /* Se muestra la superficie terminada en el flip ANTERIOR. Muestrear un render target en
+     * el mismo fotograma de vitaGL en que se dibujó da negro (log_021: la superficie tenía
+     * la escena, centro 0x253845, y la pantalla salía negra; un fotograma después se veía).
+     * El juego usa triple búfer: esa superficie ya está completa y no la toca. */
+    {
+        VgSurface *done = s_vg.largest ? s_vg.largest : s_vg.pending;
+        if (s_vg.pending) s_vg.front = s_vg.pending;
+        s_vg.pending = done;
+    }
     {
         static uint32_t last_front = ~0u;
         uint32_t f = s_vg.front ? s_vg.front->offset : 0;
