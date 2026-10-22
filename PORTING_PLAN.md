@@ -443,6 +443,11 @@ Fases concretas:
       VBO fetch_attr solo corre en conversiones; `DRAW_SPEEDHACK` no está activo; la caché de shaders de vitaGL ya
       está); fase 6 («125 texturas subidas» es acumulado, no por fotograma); escala de render (la GPU no es el cuello).
       Negro: la prueba de draws `SRC_ALPHA,ZERO` (5 s sí / 5 s no) se extiende a las rutas con vertex program (`[HW sa0]`).
+- [x] (2026-10-21) **log_019: arranque congelado por la afinidad fija (fase 7).** vglInitExtended en el s 8 y nunca
+      `[HW] renderer activo`; `[THR]`: el ejecutor (fijado al núcleo 1, mask 0x20000) en READY sin CPU mientras
+      kernel_timer_thread (misma prioridad) corría en ese núcleo. La Vita no reparte tiempo entre hilos de igual
+      prioridad: afinidad fija retirada (juego, ejecutor, vídeo). TLS rápido y atajo de vvm_ptr se activaron sin
+      avisos y se mantienen. Lección: en la Vita no fijar hilos a un núcleo sin subir su prioridad.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

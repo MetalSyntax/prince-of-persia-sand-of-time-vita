@@ -575,7 +575,6 @@ static int ng_init(const char *backend)
     }
 #if !defined(RESOT_HW_GLSL)
     s_vg.gl_thread = sceKernelGetThreadId();
-    sceKernelChangeThreadCpuAffinityMask(0, SCE_KERNEL_CPU_MASK_USER_1);   /* plan, fase 7 */
 #endif
     s_vg.ysign = (flip && *flip ? atoi(flip) : VG_RT_FLIP_DEFAULT) ? -1 : 1;
     s_vg.gpu_vsh = !(getenv("RECOMP_VITA_CPU_VSH") && atoi(getenv("RECOMP_VITA_CPU_VSH")));

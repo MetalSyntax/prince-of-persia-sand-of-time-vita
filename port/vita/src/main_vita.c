@@ -182,11 +182,9 @@ static void load_env_file(void)
 
 static void *game_main(void *unused)
 {
-#ifdef __vita__
-    /* plan, fase 7: el juego en el núcleo 0, el ejecutor de la GPU en el 1 (ng_init) y el
-     * vídeo en el 2 (movie_vita.c); el resto de hilos, en cualquiera. */
-    sceKernelChangeThreadCpuAffinityMask(0, SCE_KERNEL_CPU_MASK_USER_0);
-#endif
+    /* Sin afinidad fija (plan, fase 7, retirada): la Vita no reparte tiempo entre hilos de igual
+     * prioridad en un núcleo; con el ejecutor fijo en el núcleo 1 junto a kernel_timer_thread se
+     * quedó READY sin CPU para siempre (log_019: arranque congelado tras vglInitExtended). */
     void *xbe_data = NULL;
     size_t xbe_size = 0;
     char why[512];

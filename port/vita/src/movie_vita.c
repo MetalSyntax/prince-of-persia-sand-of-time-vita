@@ -124,7 +124,6 @@ static int decode_thread(SceSize args, void *argp)
     (void)args; (void)argp;
     vita_thread_register((void *)decode_thread);
     vita_tls_register();
-    sceKernelChangeThreadCpuAffinityMask(0, SCE_KERNEL_CPU_MASK_USER_2);
     snprintf(path, sizeof path, "file:" DATA_DIR "/VIDEO/%s.int", s_cur);
     if (!pkt || !f || avformat_open_input(&fmt, path, NULL, NULL) < 0 || avformat_find_stream_info(fmt, NULL) < 0) {
         fprintf(stderr, "[MOVIE] no se pudo abrir %s\n", path);
