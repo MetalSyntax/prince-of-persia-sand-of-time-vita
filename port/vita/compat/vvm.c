@@ -34,6 +34,7 @@ size_t view_take(const void *addr);
 #define CONTIG_VA 0x80000000u
 
 int32_t vvm_pt[VVM_PAGES];
+uint32_t vvm_ram_lo, vvm_ram_size;
 
 static uint8_t  *s_block;            /* B */
 static uint32_t  s_h;                /* H: host de guest 0 */
@@ -319,3 +320,17 @@ int mprotect(void *addr, size_t len, int prot) { (void)addr; (void)len; (void)pr
 int memfd_create(const char *name, unsigned flags) { (void)name; (void)flags; return -1; }
 long syscall(long number, ...) { (void)number; return -1; }
 #endif
+
+int vvm_fastpath_enable(void)
+{
+    uint32_t p;
+    for (p = s_h >> VVM_PAGE_SHIFT; p < (s_h + RAM_SIZE) >> VVM_PAGE_SHIFT; p++)
+        if (vvm_pt[p]) {
+            fprintf(stderr, "[VVM] atajo de RAM desactivado: la página 0x%08X tiene desplazamiento\n", p << VVM_PAGE_SHIFT);
+            return 0;
+        }
+    vvm_ram_lo = s_h;
+    vvm_ram_size = RAM_SIZE;
+    fprintf(stderr, "[VVM] atajo de RAM activo (0x%08X, 64 MB sin tabla)\n", s_h);
+    return 1;
+}

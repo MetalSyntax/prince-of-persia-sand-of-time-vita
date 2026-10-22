@@ -477,7 +477,7 @@ static void vg_blit(GLuint tex, float x, float y, float w, float h, float fbw, f
 /* Perfil por fotograma (línea "[HW vita] ... fps"): µs en cada parte del backend. Lo que
  * el ejecutor tarda de más ("[KICK] ... executing") es CPU de upstream: lectura de
  * vértices e intérprete de vertex shaders (cpu_vsh). */
-static struct { uint64_t compose, present, verts, pverts, depths; } s_prof;
+static struct { uint64_t compose, present, verts, pverts, depths, rej_pack, rej_inputs, rej_vsp; } s_prof;
 #if defined(RESOT_HW_GLSL)
 #include <time.h>
 static uint64_t vg_now_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u; }
@@ -575,6 +575,7 @@ static int ng_init(const char *backend)
     }
 #if !defined(RESOT_HW_GLSL)
     s_vg.gl_thread = sceKernelGetThreadId();
+    sceKernelChangeThreadCpuAffinityMask(0, SCE_KERNEL_CPU_MASK_USER_1);   /* plan, fase 7 */
 #endif
     s_vg.ysign = (flip && *flip ? atoi(flip) : VG_RT_FLIP_DEFAULT) ? -1 : 1;
     s_vg.gpu_vsh = !(getenv("RECOMP_VITA_CPU_VSH") && atoi(getenv("RECOMP_VITA_CPU_VSH")));
@@ -1006,36 +1007,13 @@ static VgProgram *vg_begin_draw(VgSurface **out, uint32_t vsp)
     return p;
 }
 
+static int vg_diag_skip_sa_zero(const char *path);
 static void ng_draw(const HwVertex *v, uint32_t count)
 {
     VgSurface *s;
     uint32_t i;
     if (!count) return;
-    if (count <= 6) {
-        /* ponytail: diagnóstico de la imagen negra (log_017): las pasadas 2D que cubren toda la
-         * superficie se anotan ([HW fs]) y las de mezcla SRC_ALPHA,ZERO se omiten 5 s sí, 5 s no.
-         * Quitar cuando se sepa cuál pinta de negro. */
-        float l = 1e9f, r = -1e9f, t = 1e9f, b = -1e9f;
-        for (i = 0; i < count; i++) {
-            if (v[i].pos[0] < l) l = v[i].pos[0];
-            if (v[i].pos[0] > r) r = v[i].pos[0];
-            if (v[i].pos[1] < t) t = v[i].pos[1];
-            if (v[i].pos[1] > b) b = v[i].pos[1];
-        }
-        if (l <= 1 && t <= 1 && r >= 600 && b >= 440) {
-            static unsigned logged;
-            int skip_period = (GetTickCount() / 5000) & 1;
-            int sa_zero = s_gpu.blend_enable && s_gpu.blend_sfactor == 0x302 && s_gpu.blend_dfactor == 0;
-            if (logged++ < 40)
-                fprintf(stderr, "[HW fs] flip %u: superficie 0x%08X, mezcla %d %X/%X, tex0 %s0x%08X fmt 0x%X, "
-                        "combiners 0x%08X final 0x%08X/0x%08X, color_mask 0x%08X%s\n", s_hw.frame,
-                        (unsigned)dma_resolve(s_gpu.color_offset), s_gpu.blend_enable, s_gpu.blend_sfactor,
-                        s_gpu.blend_dfactor, s_gpu.texs[0].valid ? "" : "(no) ", s_gpu.texs[0].offset,
-                        s_gpu.texs[0].color, s_gpu.rc.control, s_gpu.rc.final0, s_gpu.rc.final1,
-                        s_gpu.color_mask, sa_zero && skip_period ? " OMITIDA" : "");
-            if (sa_zero && skip_period) return;
-        }
-    }
+    if (vg_diag_skip_sa_zero("2D")) return;
     if (!vg_begin_draw(&s, 0)) return;
     for (i = 0; i < 8; i++) {
         glEnableVertexAttribArray(i);
@@ -1194,6 +1172,24 @@ static uint32_t vg_vsp_get(const uint8_t *inputs, uint32_t ninputs)
     return seen = e->vs ? (uint32_t)(e - s_vg.vsp) + 1 : 0;
 }
 
+/* ponytail: diagnóstico de la imagen negra (log_017/018): los draws con mezcla
+ * SRC_ALPHA,ZERO (escriben color*alfa y sustituyen lo que había) se omiten 5 s sí, 5 s no,
+ * en las tres rutas, y se anotan los primeros ([HW sa0]). Quitar al saber cuál oscurece. */
+static int vg_diag_skip_sa_zero(const char *path)
+{
+    static unsigned logged;
+    int skip;
+    if (!(s_gpu.blend_enable && s_gpu.blend_sfactor == 0x302 && s_gpu.blend_dfactor == 0)) return 0;
+    skip = (GetTickCount() / 5000) & 1;
+    if (logged++ < 40)
+        fprintf(stderr, "[HW sa0] flip %u, %s: superficie 0x%08X, tex0 %s0x%08X fmt 0x%X, combiners 0x%08X "
+                "final 0x%08X/0x%08X, color_mask 0x%08X, idx %u%s\n", s_hw.frame, path,
+                (unsigned)dma_resolve(s_gpu.color_offset), s_gpu.texs[0].valid ? "" : "(no) ", s_gpu.texs[0].offset,
+                s_gpu.texs[0].color, s_gpu.rc.control, s_gpu.rc.final0, s_gpu.rc.final1, s_gpu.color_mask,
+                s_gpu.idx_count, skip ? " OMITIDO" : "");
+    return skip;
+}
+
 #if !defined(RESOT_HW_GLSL)
 /* Caché de vértices de los batches con vertex programs (VBO de vitaGL).
  *
@@ -1278,6 +1274,7 @@ static int vg_vcache_draw(uint32_t n, const uint8_t *inputs, uint32_t ninputs, u
     default:                     for (i = 0; i + 3 < n; i += 2) { VC_IDX(i, i + 1, i + 3); VC_IDX(i, i + 3, i + 2); } break;
     }
 #undef VC_IDX
+    if (vg_diag_skip_sa_zero("vertex program (VBO)")) return 1;
     if (ni && (p = vg_begin_draw(&s, vsp)) != NULL) {
         float fogp[4] = { s_gpu.fog_param[0], s_gpu.fog_param[1], (float)s_gpu.fog_mode, s_gpu.fog_enable ? 1.0f : 0.0f };
         uint32_t cgen = nv2a_vsh_constant_generation();
@@ -1337,7 +1334,8 @@ static int ng_draw_program_batch(void)
     default:
         return 1;                           /* puntos y líneas: ningún camino los dibuja */
     }
-    if (!nv2a_vsh_pack_gpu(&words, &inputs, &ninputs) || !ninputs || ninputs > 8) return 0;
+    if (!nv2a_vsh_pack_gpu(&words, &inputs, &ninputs)) { s_prof.rej_pack++; return 0; }
+    if (!ninputs || ninputs > 8) { s_prof.rej_inputs++; return 0; }
     /* La composición del glow (como ng_draw_program_batch de Android). */
     if (hw_postprocess_candidate(n)) {
         Nv2aVshOutput post[4];
@@ -1357,7 +1355,7 @@ static int ng_draw_program_batch(void)
         if (!verts || !idx) vg_fail("program batch buffers");
     }
     EnterCriticalSection(&s_hw.lock);
-    if (!(vsp = vg_vsp_get(inputs, ninputs))) { LeaveCriticalSection(&s_hw.lock); return 0; }
+    if (!(vsp = vg_vsp_get(inputs, ninputs))) { s_prof.rej_vsp++; LeaveCriticalSection(&s_hw.lock); return 0; }
 #if !defined(RESOT_HW_GLSL)
     if (vg_vcache_draw(n, inputs, ninputs, vsp)) { LeaveCriticalSection(&s_hw.lock); return 1; }
 #endif
@@ -1394,6 +1392,7 @@ static int ng_draw_program_batch(void)
         break;
     }
 #undef VG_IDX
+    if (vg_diag_skip_sa_zero("vertex program")) { LeaveCriticalSection(&s_hw.lock); return 1; }
     if (ni && (p = vg_begin_draw(&s, vsp)) != NULL) {
         float fogp[4] = { s_gpu.fog_param[0], s_gpu.fog_param[1], (float)s_gpu.fog_mode,
                           s_gpu.fog_enable ? 1.0f : 0.0f };
@@ -1597,7 +1596,7 @@ static void ng_flip(void)
         double fr = frames ? (double)frames : 1.0;
         fprintf(stderr, "[HW vita] %.1f fps; %.1f draws/frame; %u shaders; %llu texturas subidas; ms/frame: "
                 "compose %.1f, present %.1f; %.0f+%.0f vért/frame; %llu depth nuevos; %u DXT1; "
-                "VBO %u KB (%u reusos, %u conversiones); "
+                "VBO %u KB (%u reusos, %u conversiones); a CPU %llu/%llu/%llu (pack/entradas/programa); "
                 "vitaGL libre VRAM %u KB, RAM %u KB\n",
                 frames * 1000.0 / (now - last_log), frames ? (double)(s_hw.draws - last_draws) / frames : 0,
                 s_vg.nprograms, (unsigned long long)s_hw.tex_uploads,
@@ -1608,6 +1607,8 @@ static void ng_flip(void)
 #else
                 s_vc_bytes >> 10, s_vc_hits, s_vc_builds,
 #endif
+                (unsigned long long)s_prof.rej_pack, (unsigned long long)s_prof.rej_inputs,
+                (unsigned long long)s_prof.rej_vsp,
 #if defined(RESOT_HW_GLSL)
                 0u, 0u);
 #else

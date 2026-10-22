@@ -60,6 +60,7 @@ extern void vita_thread_register(void *entry);
 extern void vita_threads_log(unsigned interval_ms);
 extern void vita_log_install(const char *path);
 extern void vita_log_tick(void);
+extern void vita_tls_register_main(void);
 
 static volatile int s_game_running;
 
@@ -181,6 +182,11 @@ static void load_env_file(void)
 
 static void *game_main(void *unused)
 {
+#ifdef __vita__
+    /* plan, fase 7: el juego en el núcleo 0, el ejecutor de la GPU en el 1 (ng_init) y el
+     * vídeo en el 2 (movie_vita.c); el resto de hilos, en cualquiera. */
+    sceKernelChangeThreadCpuAffinityMask(0, SCE_KERNEL_CPU_MASK_USER_0);
+#endif
     void *xbe_data = NULL;
     size_t xbe_size = 0;
     char why[512];
@@ -206,6 +212,7 @@ static void *game_main(void *unused)
         free(xbe_data);
         return NULL;
     }
+    vvm_fastpath_enable();
     fprintf(stderr, "[BOOT] memoria guest lista: offset 0x%08X, %u MB reales\n",
             (unsigned)g_xbox_mem_offset, (unsigned)(vvm_committed_bytes() >> 20));
     log_free_memory("tras el layout");
@@ -254,6 +261,7 @@ int main(void)
     open_log();
 #ifdef __vita__
     vita_thread_register((void *)main);
+    vita_tls_register_main();
 #endif
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);   /* ponytail: por línea, para no perder el final al crashear */

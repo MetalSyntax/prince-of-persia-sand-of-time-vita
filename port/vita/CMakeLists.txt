@@ -202,6 +202,7 @@ target_link_libraries(${PROJECT_NAME}
   -Wl,--whole-archive pthread -Wl,--no-whole-archive
   -Wl,--pic-veneer -Wl,--wrap=recomp_lookup -Wl,--wrap=pthread_create -Wl,--wrap=CreateThread
   -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=memalign
+  -Wl,--wrap=__emutls_get_address
   SceDisplay_stub SceSysmem_stub ScePower_stub
   vitaGL_lib vitashark SceShaccCgExt taihen_stub SceShaccCg_stub mathneon
   SceKernelThreadMgr_stub SceIofilemgr_stub SceRtc_stub SceAppUtil_stub SceTouch_stub SceAudio_stub SceAppMgr_stub SceCtrl_stub

@@ -47,12 +47,20 @@ typedef struct { void *(*fn)(void *); void *arg; } PtBox;
 
 int __real_pthread_create(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *);
 
+static void tls_register(void);
+static void tls_unregister(void);
+
 static void *pt_tramp(void *p)
 {
     PtBox b = *(PtBox *)p;
     free(p);
+    tls_register();
     vita_thread_register((void *)b.fn);
-    return b.fn(b.arg);
+    {
+        void *r = b.fn(b.arg);
+        tls_unregister();
+        return r;
+    }
 }
 
 int __wrap_pthread_create(pthread_t *th, const pthread_attr_t *attr, void *(*fn)(void *), void *arg)
@@ -130,3 +138,91 @@ void *__wrap_malloc(size_t n) { return big("malloc", n, __builtin_return_address
 void *__wrap_calloc(size_t a, size_t b) { return big("calloc", a * b, __builtin_return_address(0), __real_calloc(a, b)); }
 void *__wrap_realloc(void *o, size_t n) { return big("realloc", n, __builtin_return_address(0), __real_realloc(o, n)); }
 void *__wrap_memalign(size_t a, size_t n) { return big("memalign", n, __builtin_return_address(0), __real_memalign(a, n)); }
+
+/* ── TLS rápido (plan de optimización, fase 1) ────────────────────────────────
+ * Cada acceso a una variable __thread (los registros guest g_eax..., 110 354 sitios
+ * del binario) llamaba a __emutls_get_address: __gthread_active_p ->
+ * pthread_getspecific -> pte_osTlsGetValue -> vitasdk_get_tls_data ->
+ * __getreent_for_thread -> sceKernelGetTLSAddr y un recorrido de lista. Aquí cada
+ * hilo registrado guarda las direcciones ya resueltas, indexadas por el índice de
+ * emutls. El hilo se identifica por TPIDRURO (mrc, legible en modo usuario; no se
+ * escribe nada en él ni en ningún slot de TLS). Si TPIDRURO vale 0 o lo comparten
+ * dos hilos vivos, todo vuelve a la ruta original. */
+#define TLS_SLOTS 2048
+#define TLS_TAB   256
+typedef struct { uint32_t tid; SceUID thid; void *addr[TLS_SLOTS]; } TlsRec;
+typedef struct { size_t size, align; uintptr_t index; void *templ; } EmutlsObj;   /* libgcc emutls */
+void *__real___emutls_get_address(EmutlsObj *obj);
+static TlsRec *volatile s_tls[TLS_TAB];
+static volatile int s_tls_off;
+
+static inline uint32_t tpidruro(void)
+{
+    uint32_t v;
+    __asm__ volatile("mrc p15, 0, %0, c13, c0, 3" : "=r"(v));
+    return v;
+}
+
+void *__wrap___emutls_get_address(EmutlsObj *obj)
+{
+    uint32_t t = tpidruro(), i, k;
+    if (!s_tls_off) {
+        for (k = 0; k < 4; k++) {
+            TlsRec *r = s_tls[((t >> 4) + k) & (TLS_TAB - 1)];
+            if (r && r->tid == t) {
+                if ((i = (uint32_t)obj->index) != 0 && i < TLS_SLOTS) {
+                    void *a = r->addr[i];
+                    if (!a) r->addr[i] = a = __real___emutls_get_address(obj);
+                    return a;
+                }
+                break;
+            }
+        }
+    }
+    return __real___emutls_get_address(obj);
+}
+
+/* Al empezar cada hilo (pt_tramp) y en el principal. */
+static void tls_register(void)
+{
+    uint32_t t = tpidruro(), k, slot = TLS_TAB;
+    SceUID me = sceKernelGetThreadId();
+    TlsRec *r;
+    if (s_tls_off) return;
+    if (!t) { s_tls_off = 1; fprintf(stderr, "[TLS] TPIDRURO = 0: TLS rápido desactivado\n"); return; }
+    for (k = 0; k < 4; k++) {
+        uint32_t j = ((t >> 4) + k) & (TLS_TAB - 1);
+        TlsRec *o = s_tls[j];
+        if (o && o->tid == t && o->thid != me) {
+            SceKernelThreadInfo info;
+            memset(&info, 0, sizeof info);
+            info.size = sizeof info;
+            if (sceKernelGetThreadInfo(o->thid, &info) >= 0 && info.status != 0x10 /* DORMANT */) {
+                s_tls_off = 1;
+                fprintf(stderr, "[TLS] TPIDRURO 0x%08X compartido por dos hilos: TLS rápido desactivado\n", t);
+                return;
+            }
+        }
+        if (o && o->tid == t) { slot = j; break; }   /* hilo muerto con el mismo valor: se reemplaza */
+        if (!o && slot == TLS_TAB) slot = j;
+    }
+    if (slot == TLS_TAB || !(r = (TlsRec *)calloc(1, sizeof *r))) return;   /* sin hueco: ruta original */
+    r->tid = t; r->thid = me;
+    s_tls[slot] = r;
+}
+
+/* Al terminar un hilo: su registro deja de valer (su TLS se libera). */
+static void tls_unregister(void)
+{
+    uint32_t t = tpidruro(), k;
+    for (k = 0; k < 4; k++) {
+        uint32_t j = ((t >> 4) + k) & (TLS_TAB - 1);
+        TlsRec *o = s_tls[j];
+        if (o && o->tid == t && o->thid == sceKernelGetThreadId()) { s_tls[j] = NULL; return; }
+    }
+}
+
+/* Para el hilo principal y los creados con sceKernelCreateThread (audio, log, vídeo). */
+void vita_tls_register_main(void) { tls_register(); }
+void vita_tls_register(void) { tls_register(); }
+void vita_tls_unregister(void) { tls_unregister(); }

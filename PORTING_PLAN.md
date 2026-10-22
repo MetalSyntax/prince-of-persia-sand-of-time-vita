@@ -428,6 +428,21 @@ Fases concretas:
       *Hipótesis:* una pasada final a pantalla completa la oscurece; el juego usa mezcla `SRC_ALPHA, ZERO`
       (`302/0`), que da negro si el alfa de nuestro fragment shader sale 0. Prueba: `[HW fs]` anota las
       pasadas 2D a pantalla completa (mezcla, destino, textura, combiners) y las `302/0` se omiten 5 s sí / 5 s no.
+- [ ] (2026-10-21) **log_018 + `pop_sot_vita_optimization_plan.md`:** las pasadas 2D a pantalla completa son aditivas
+      (glow 1/1, color_mask RGB): no oscurecen. Del plan, verificado e implementado:
+      - Fase 1 (TLS): `__emutls_get_address` encadena 6 llamadas y un recorrido de lista (110 354 sitios en el
+        binario). `--wrap=__emutls_get_address` con caché por hilo indexada por el índice de emutls; el hilo se
+        identifica leyendo TPIDRURO (mrc; no se escribe: es de solo lectura en usuario, como proponía el plan, daría
+        instrucción indefinida). Se desactiva si TPIDRURO vale 0 o lo comparten dos hilos vivos. Registran los hilos
+        de pthread/CreateThread y los de sceKernelCreateThread propios; baja al terminar.
+      - Fase 3 (`vvm_ptr`): atajo para los 64 MB de RAM (vista identidad) tras comprobar que su tabla vale 0.
+      - Fase 4: contadores de batches que no van a la GPU (pack/entradas/programa) en la línea de fps.
+        `raster_batch_program` del perfil no era la caída al software: es la ruta que llama a la GPU.
+      - Fase 7: juego en el núcleo 0, ejecutor GPU en el 1, vídeo en el 2 (relojes ya en 444/222/222/166).
+      No aplicado: fase 2 (≈14 000 llamadas/s, ~1–2 % de CPU, no 10–15 ms/fotograma); fase 5 NEON (con la caché de
+      VBO fetch_attr solo corre en conversiones; `DRAW_SPEEDHACK` no está activo; la caché de shaders de vitaGL ya
+      está); fase 6 («125 texturas subidas» es acumulado, no por fotograma); escala de render (la GPU no es el cuello).
+      Negro: la prueba de draws `SRC_ALPHA,ZERO` (5 s sí / 5 s no) se extiende a las rutas con vertex program (`[HW sa0]`).
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

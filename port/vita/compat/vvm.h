@@ -24,10 +24,17 @@
 
 extern int32_t vvm_pt[VVM_PAGES];
 
+/* Atajo (plan de optimización, fase 3): la RAM del juego (64 MB desde vvm_ram_lo) es la
+ * vista identidad, desplazamiento 0, sin leer la tabla. vvm_fastpath_enable() lo activa
+ * solo si comprueba que toda esa zona de la tabla vale 0; mientras, vvm_ram_size = 0. */
+extern uint32_t vvm_ram_lo, vvm_ram_size;
 static inline void *vvm_ptr(uint32_t host)
 {
+    if (__builtin_expect(host - vvm_ram_lo < vvm_ram_size, 1)) return (void *)(uintptr_t)host;
     return (void *)(uintptr_t)(host + (uint32_t)vvm_pt[host >> VVM_PAGE_SHIFT]);
 }
+/* Tras xbox_MemoryLayoutInit: 1 si el atajo quedó activo. */
+int vvm_fastpath_enable(void);
 
 /* Reserva el bloque real (antes de xbox_MemoryLayoutInit). 1 = OK. */
 int vvm_init(void);

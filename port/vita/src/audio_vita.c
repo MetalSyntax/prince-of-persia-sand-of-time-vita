@@ -37,6 +37,7 @@ static int out_thread(SceSize args, void *argp)
     (void)args; (void)argp;
 #ifdef __vita__
     vita_thread_register((void *)out_thread);
+    { extern void vita_tls_register(void); vita_tls_register(); }
 #endif
     while (s_run) {
         if (queued()) {

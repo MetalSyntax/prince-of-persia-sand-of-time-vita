@@ -39,6 +39,8 @@
 #define AUDIO_LEN 1024              /* muestras por salida de SceAudio */
 
 extern void vita_thread_register(void *entry);
+extern void vita_tls_register(void);
+extern void vita_tls_unregister(void);
 
 static pthread_mutex_t s_lock = PTHREAD_MUTEX_INITIALIZER;
 static char s_name[64];            /* último video\X.int abierto, sin extensión */
@@ -121,6 +123,8 @@ static int decode_thread(SceSize args, void *argp)
     uint64_t t_dec = 0;
     (void)args; (void)argp;
     vita_thread_register((void *)decode_thread);
+    vita_tls_register();
+    sceKernelChangeThreadCpuAffinityMask(0, SCE_KERNEL_CPU_MASK_USER_2);
     snprintf(path, sizeof path, "file:" DATA_DIR "/VIDEO/%s.int", s_cur);
     if (!pkt || !f || avformat_open_input(&fmt, path, NULL, NULL) < 0 || avformat_find_stream_info(fmt, NULL) < 0) {
         fprintf(stderr, "[MOVIE] no se pudo abrir %s\n", path);
@@ -175,6 +179,7 @@ out:
     av_frame_free(&f);
     av_packet_free(&pkt);
     s_playing = 0;
+    vita_tls_unregister();
     return sceKernelExitThread(0);
 }
 
@@ -184,6 +189,7 @@ static int audio_thread(SceSize args, void *argp)
     int port = -1, rate = 0;
     (void)args; (void)argp;
     vita_thread_register((void *)audio_thread);
+    vita_tls_register();
     for (;;) {
         unsigned i, r = s_aq_r, w = s_aq_w;
         if (!s_playing) { sceKernelDelayThread(10000); continue; }

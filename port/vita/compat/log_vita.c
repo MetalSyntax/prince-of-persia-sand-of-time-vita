@@ -91,6 +91,7 @@ void vita_log_flush(void)
 static int log_thread(SceSize args, void *argp)
 {
     (void)args; (void)argp;
+    { extern void vita_tls_register(void); vita_tls_register(); }
     for (;;) {
         sceKernelDelayThread(100 * 1000);
         vita_log_flush();
