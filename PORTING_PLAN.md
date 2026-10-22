@@ -460,6 +460,9 @@ Fases concretas:
       después se veía (los destellos de log_014/015 eran esos repintados tardíos). Arreglo: en cada flip se muestra la
       superficie terminada en el flip anterior (triple búfer: ya completa y el juego no la toca); un fotograma de
       latencia, sin glFinish. Fuera la sonda y la omisión de SRC_ALPHA,ZERO.
+- [x] (2026-10-21) **Vita3K vuelve a servir para iterar:** con vitaGL en `SOFTFP_ABI=1` el emulador muestra la imagen
+      (la regla «no probar en Vita3K» venía de cuando vitaGL no pintaba nada). En un Mac Mini M4 solo alcanza ~20 fps:
+      indicador relativo de que falta mucha optimización; los resultados se confirman en la consola.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.
