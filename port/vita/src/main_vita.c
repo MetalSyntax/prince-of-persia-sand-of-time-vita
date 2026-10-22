@@ -60,8 +60,6 @@ extern void vita_thread_register(void *entry);
 extern void vita_threads_log(unsigned interval_ms);
 extern void vita_log_install(const char *path);
 extern void vita_log_tick(void);
-extern void vita_prof_start(void);
-extern void vita_prof_log(void);
 
 static volatile int s_game_running;
 
@@ -256,7 +254,6 @@ int main(void)
     open_log();
 #ifdef __vita__
     vita_thread_register((void *)main);
-    vita_prof_start();
 #endif
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);   /* ponytail: por línea, para no perder el final al crashear */
@@ -312,7 +309,6 @@ int main(void)
             log_free_memory("cada 10 s");
 #ifdef __vita__
             vita_threads_log(10000);
-            vita_prof_log();
             vita_log_tick();
 #endif
         }

@@ -415,6 +415,13 @@ Fases concretas:
       (2) `[HW front]` cuando cambia la superficie mostrada; (3) perfil por muestreo del ejecutor
       (`compat/prof_vita.c`, `nv2a_pb_exec.c` con `-finstrument-functions`, `[PROF]` cada 10 s, simbolizar con
       addr2line). Quitar la instrumentación cuando se haya localizado el coste.
+- [ ] (2026-10-21) **log_016:** sin destellos (el repintado a mitad de fotograma era la causa) pero negro: el
+      `drawn_offset` de `xbox_FramebufferWindowSet` se quedó fijo en 0x80104000 y se mostraba siempre esa superficie.
+      Vuelta a «la más grande del fotograma» (upstream). Perfil por muestreo (`[PROF]`): `vg_now_us` (la medición
+      por draw, una llamada al sistema) 13,7 % del ejecutor; `nv2a_pb_exec_method` 11 % propio / 34 % inclusivo;
+      estado de texturas (`record_tex_reg`…) ~10 % (inflado por la instrumentación); 63 % fuera de lo
+      instrumentado (vitaGL, memcpy, esperas). Cambios: fuera el perfilador y la medición por draw; cada vertex
+      program sube solo las constantes que usa (`c[N]` más alto; 192 con `c[vsh_cidx(a0+N)]`).
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

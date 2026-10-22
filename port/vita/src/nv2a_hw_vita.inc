@@ -81,7 +81,7 @@ typedef struct VgProgram {
 
 /* Un vertex program del NV2A traducido (nv2a_vsh_emit_hlsl) a CG/GLSL. */
 #define VG_MAX_VSP 256
-typedef struct { uint32_t key, ninputs; uint8_t inputs[8]; GLuint vs; } VgVsp;
+typedef struct { uint32_t key, ninputs, cnum; uint8_t inputs[8]; GLuint vs; } VgVsp;   /* cnum: constantes a subir */
 
 static struct {
     int active, ysign, gpu_vsh;
@@ -477,7 +477,7 @@ static void vg_blit(GLuint tex, float x, float y, float w, float h, float fbw, f
 /* Perfil por fotograma (línea "[HW vita] ... fps"): µs en cada parte del backend. Lo que
  * el ejecutor tarda de más ("[KICK] ... executing") es CPU de upstream: lectura de
  * vértices e intérprete de vertex shaders (cpu_vsh). */
-static struct { uint64_t draw, prog_batch, tex, compose, present, verts, pverts, depths; } s_prof;
+static struct { uint64_t compose, present, verts, pverts, depths; } s_prof;
 #if defined(RESOT_HW_GLSL)
 #include <time.h>
 static uint64_t vg_now_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u; }
@@ -750,7 +750,7 @@ static void vg_sampler(VgTexture *c, const Texture *t, GLenum target)
 
 /* La textura de la etapa: un render target por offset, o la decodificada de
  * memoria guest (sample_tex, como el rasterizador por software) en caché. */
-static GLuint vg_texture_body(int stage, VgSurface *target)
+static GLuint vg_texture(int stage, VgSurface *target)
 {
     const Texture *t = &s_gpu.texs[stage];
     VgSurface *best = NULL;
@@ -865,13 +865,6 @@ bind:
     glBindTexture(gtarget, c->tex);
     vg_sampler(c, t, gtarget);
     return c->tex;
-}
-static GLuint vg_texture(int stage, VgSurface *target)
-{
-    uint64_t t = vg_now_us();
-    GLuint r = vg_texture_body(stage, target);
-    s_prof.tex += vg_now_us() - t;
-    return r;
 }
 
 /* ── dibujo ──────────────────────────────────────────────── */
@@ -1013,7 +1006,7 @@ static VgProgram *vg_begin_draw(VgSurface **out, uint32_t vsp)
     return p;
 }
 
-static void ng_draw_body(const HwVertex *v, uint32_t count)
+static void ng_draw(const HwVertex *v, uint32_t count)
 {
     VgSurface *s;
     uint32_t i;
@@ -1031,15 +1024,9 @@ static void ng_draw_body(const HwVertex *v, uint32_t count)
             s_vg.vis_pixels += a < 0 ? -a : a;
         }
     }
+    s_prof.verts += count;
     ng_mark(s); s_hw.draws++; s_hw.cpu_vsh_batches++; s_hw.tris += count / 3;
     s_gpu.tris_drawn += count / 3; s_gpu.xf_drawn += count / 3;
-}
-static void ng_draw(const HwVertex *v, uint32_t count)
-{
-    uint64_t t = vg_now_us();
-    ng_draw_body(v, count);
-    s_prof.draw += vg_now_us() - t;
-    s_prof.verts += count;
 }
 
 /* ── vertex programs en la GPU (V1.2) ────────────────────────
@@ -1132,6 +1119,16 @@ static uint32_t vg_vsp_get(const uint8_t *inputs, uint32_t ninputs)
     n = (uint32_t)nv2a_vsh_emit_hlsl(body, 1u << 17);
     if (!n) { free(body); return 0; }
     body = vg_fix_hlsl(body);
+    {   /* cuántas constantes usa: hasta la c[N] más alta; las 192 si hay c[vsh_cidx(a0 + N)] */
+        const char *q = body;
+        e->cnum = 1;
+        while ((q = strstr(q, "c[")) != NULL) {
+            q += 2;
+            if (*q < '0' || *q > '9') { e->cnum = 192; break; }
+            if ((uint32_t)atoi(q) + 1 > e->cnum) e->cnum = (uint32_t)atoi(q) + 1;
+        }
+        if (e->cnum > 192) e->cnum = 192;
+    }
     vg_emit(&b, "%s%s", s_vg_prelude, s_vg_vsp_helpers);
 #if defined(RESOT_HW_GLSL)
     vg_emit(&b, "attribute float4 a_in0, a_in1, a_in2, a_in3, a_in4, a_in5, a_in6, a_in7;\n"
@@ -1258,7 +1255,8 @@ static int vg_vcache_draw(uint32_t n, const uint8_t *inputs, uint32_t ninputs, u
     if (ni && (p = vg_begin_draw(&s, vsp)) != NULL) {
         float fogp[4] = { s_gpu.fog_param[0], s_gpu.fog_param[1], (float)s_gpu.fog_mode, s_gpu.fog_enable ? 1.0f : 0.0f };
         uint32_t cgen = nv2a_vsh_constant_generation();
-        if (p->u_c >= 0 && p->cgen != cgen) { glUniform4fv(p->u_c, 192, nv2a_vsh_constants()); p->cgen = cgen; }
+        if (p->u_c >= 0 && p->cgen != cgen) {   /* solo las que usa el programa (antes 192 = 3 KB por draw) */
+            glUniform4fv(p->u_c, (GLsizei)s_vg.vsp[vsp - 1].cnum, nv2a_vsh_constants()); p->cgen = cgen; }
         if (p->u_fogp >= 0) glUniform4fv(p->u_fogp, 1, fogp);
         glBindBuffer(GL_ARRAY_BUFFER, e->vbo);
         for (a = 0; a < 8; a++) {
@@ -1294,7 +1292,7 @@ static void vg_vcache_trim(void)
 }
 #endif
 
-static int ng_draw_program_batch_body(void)
+static int ng_draw_program_batch(void)
 {
     static uint32_t stamp[65536], batch_id;
     static uint16_t remap[65536];
@@ -1374,7 +1372,8 @@ static int ng_draw_program_batch_body(void)
         float fogp[4] = { s_gpu.fog_param[0], s_gpu.fog_param[1], (float)s_gpu.fog_mode,
                           s_gpu.fog_enable ? 1.0f : 0.0f };
         uint32_t cgen = nv2a_vsh_constant_generation();
-        if (p->u_c >= 0 && p->cgen != cgen) { glUniform4fv(p->u_c, 192, nv2a_vsh_constants()); p->cgen = cgen; }
+        if (p->u_c >= 0 && p->cgen != cgen) {   /* solo las que usa el programa (antes 192 = 3 KB por draw) */
+            glUniform4fv(p->u_c, (GLsizei)s_vg.vsp[vsp - 1].cnum, nv2a_vsh_constants()); p->cgen = cgen; }
         if (p->u_fogp >= 0) glUniform4fv(p->u_fogp, 1, fogp);
         for (a = 0; a < 8; a++) {
             if (a < ninputs) {
@@ -1394,13 +1393,6 @@ static int ng_draw_program_batch_body(void)
     }
     LeaveCriticalSection(&s_hw.lock);
     return 1;
-}
-static int ng_draw_program_batch(void)
-{
-    uint64_t t = vg_now_us();
-    int r = ng_draw_program_batch_body();
-    s_prof.prog_batch += vg_now_us() - t;
-    return r;
 }
 
 
@@ -1553,23 +1545,15 @@ static void ng_flip(void)
     DWORD now;
     if (s_hw.pending_present) nv2a_hw_flush_present();
     EnterCriticalSection(&s_hw.lock);
-    {   /* la superficie que el juego presenta (drawn_offset en el flip); si no, la más grande */
-        extern uint32_t vita_fb_presented(void);
-        uint32_t va = vita_fb_presented(), i;
-        VgSurface *pick = NULL;
-        for (i = 0; va && i < HW_MAX_SURFACES; i++)
-            if (s_vg.surfaces[i].fbo && s_vg.surfaces[i].offset == va && (!pick || s_vg.surfaces[i].frame > pick->frame))
-                pick = &s_vg.surfaces[i];
-        if (pick) s_vg.front = pick;
-        else if (s_vg.largest) s_vg.front = s_vg.largest;
-        {
-            static uint32_t last_front = ~0u;
-            uint32_t f = s_vg.front ? s_vg.front->offset : 0;
-            if (f != last_front)
-                fprintf(stderr, "[HW front] flip %u: muestra 0x%08X %s (presentado 0x%08X)\n", s_hw.frame, f,
-                        pick ? "presentada" : "la más grande", va);
-            last_front = f;
-        }
+    /* La superficie más grande dibujada en el fotograma, como upstream (hw_flip). El
+     * drawn_offset de xbox_FramebufferWindowSet no sigue los búferes de este juego: se quedaba
+     * en 0x80104000 y la pantalla salía negra (log_016). */
+    if (s_vg.largest) s_vg.front = s_vg.largest;
+    {
+        static uint32_t last_front = ~0u;
+        uint32_t f = s_vg.front ? s_vg.front->offset : 0;
+        if (f != last_front) fprintf(stderr, "[HW front] flip %u: muestra 0x%08X\n", s_hw.frame, f);
+        last_front = f;
     }
     s_vg.largest = NULL; s_hw.frame++;
 #if !defined(RESOT_HW_GLSL)
@@ -1586,12 +1570,11 @@ static void ng_flip(void)
         uint32_t frames = s_hw.frame - last_frame;
         double fr = frames ? (double)frames : 1.0;
         fprintf(stderr, "[HW vita] %.1f fps; %.1f draws/frame; %u shaders; %llu texturas subidas; ms/frame: "
-                "draw %.1f, prog %.1f, tex %.1f, compose %.1f, present %.1f; %.0f+%.0f vért/frame; %llu depth nuevos; %u DXT1; "
+                "compose %.1f, present %.1f; %.0f+%.0f vért/frame; %llu depth nuevos; %u DXT1; "
                 "VBO %u KB (%u reusos, %u conversiones); "
                 "vitaGL libre VRAM %u KB, RAM %u KB\n",
                 frames * 1000.0 / (now - last_log), frames ? (double)(s_hw.draws - last_draws) / frames : 0,
                 s_vg.nprograms, (unsigned long long)s_hw.tex_uploads,
-                s_prof.draw / 1000.0 / fr, s_prof.prog_batch / 1000.0 / fr, s_prof.tex / 1000.0 / fr,
                 s_prof.compose / 1000.0 / fr, s_prof.present / 1000.0 / fr, s_prof.verts / fr, s_prof.pverts / fr,
                 (unsigned long long)s_prof.depths, s_vg.dxt1_uploads,
 #if defined(RESOT_HW_GLSL)
