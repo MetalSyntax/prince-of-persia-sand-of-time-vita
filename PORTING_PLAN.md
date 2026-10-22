@@ -448,6 +448,12 @@ Fases concretas:
       kernel_timer_thread (misma prioridad) corría en ese núcleo. La Vita no reparte tiempo entre hilos de igual
       prioridad: afinidad fija retirada (juego, ejecutor, vídeo). TLS rápido y atajo de vvm_ptr se activaron sin
       avisos y se mantienen. Lección: en la Vita no fijar hilos a un núcleo sin subir su prioridad.
+- [ ] (2026-10-21) **log_020:** sin afinidad fija vuelve a arrancar; TLS rápido: menú 3,6 → 4,4–4,9 fps. Los draws
+      `SRC_ALPHA,ZERO` son la reducción de la imagen al glow (destino 0x805B4000 de 320x240, origen el búfer de
+      pantalla): no escriben en pantalla; omitirlos no cambia nada. Los logs muestran que se elige bien la superficie
+      (la escena se dibuja en 0x80104000 en el intervalo 0 y se muestra 0x80104000 en el flip 0) y aun así sale negro.
+      Sonda de píxeles (`[HW probe]`, cada 5 s): centro de la superficie justo antes del primer glow aditivo y al
+      componer, para saber si la escena llega a la textura y si algo la borra después.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

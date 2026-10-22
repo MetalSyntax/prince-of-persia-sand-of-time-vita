@@ -1007,12 +1007,19 @@ static VgProgram *vg_begin_draw(VgSurface **out, uint32_t vsp)
 }
 
 static int vg_diag_skip_sa_zero(const char *path);
+static void vg_probe(VgSurface *s, const char *label, uint32_t *last_ms);
 static void ng_draw(const HwVertex *v, uint32_t count)
 {
     VgSurface *s;
     uint32_t i;
     if (!count) return;
     if (vg_diag_skip_sa_zero("2D")) return;
+    if (count <= 6 && s_gpu.blend_enable && s_gpu.blend_sfactor == 1 && s_gpu.blend_dfactor == 1) {
+        static uint32_t t;
+        float l = 1e9f, r = -1e9f;
+        for (i = 0; i < count; i++) { if (v[i].pos[0] < l) l = v[i].pos[0]; if (v[i].pos[0] > r) r = v[i].pos[0]; }
+        if (l <= 1 && r >= 600) vg_probe(ng_surface(), "antes del glow", &t);
+    }
     if (!vg_begin_draw(&s, 0)) return;
     for (i = 0; i < 8; i++) {
         glEnableVertexAttribArray(i);
@@ -1174,6 +1181,21 @@ static uint32_t vg_vsp_get(const uint8_t *inputs, uint32_t ninputs)
 /* ponytail: diagnóstico de la imagen negra (log_017/018): los draws con mezcla
  * SRC_ALPHA,ZERO (escriben color*alfa y sustituyen lo que había) se omiten 5 s sí, 5 s no,
  * en las tres rutas, y se anotan los primeros ([HW sa0]). Quitar al saber cuál oscurece. */
+/* ponytail: diagnóstico de la imagen negra (log_020): color del centro de una superficie, leído de
+ * su FBO una vez cada 5 s por etiqueta (glReadPixels para la GPU: solo ahí). Quitar al resolverlo. */
+static void vg_probe(VgSurface *s, const char *label, uint32_t *last_ms)
+{
+    uint8_t c[4] = {0};
+    DWORD now = GetTickCount();
+    if (!s || !s->fbo || now - *last_ms < 5000) return;
+    *last_ms = now;
+    glBindFramebuffer(GL_FRAMEBUFFER, s->fbo);
+    glReadPixels((GLint)(hw_px(s->w, s->sc) / 2), (GLint)(hw_py(s->h, s->sc) / 2), 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, c);
+    vg_bind_surface(&(VgSurface){0});   /* la caché de vg_bind_surface ya no vale */
+    fprintf(stderr, "[HW probe] flip %u, %s: superficie 0x%08X, centro %02X%02X%02X%02X\n", s_hw.frame, label,
+            s->offset, c[0], c[1], c[2], c[3]);
+}
+
 static int vg_diag_skip_sa_zero(const char *path)
 {
     static unsigned logged;
@@ -1503,6 +1525,7 @@ static void ng_compose_body(void)
     }
     s_vg.movie_ok = 0;
 #endif
+    { static uint32_t t; vg_probe(s_vg.front, "al componer", &t); glBindFramebuffer(GL_FRAMEBUFFER, 0); }
     if (s_vg.front) {
         /* la fila 0 de la superficie es la fila 0 del guest (arriba) en las dos convenciones */
         vg_blit(s_vg.front->tex, px, py, pw, ph, VG_SCREEN_W, VG_SCREEN_H);
