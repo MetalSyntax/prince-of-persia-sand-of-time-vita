@@ -422,6 +422,12 @@ Fases concretas:
       estado de texturas (`record_tex_reg`…) ~10 % (inflado por la instrumentación); 63 % fuera de lo
       instrumentado (vitaGL, memcpy, esperas). Cambios: fuera el perfilador y la medición por draw; cada vertex
       program sube solo las constantes que usa (`c[N]` más alto; 192 con `c[vsh_cidx(a0+N)]`).
+- [ ] (2026-10-21) **log_017:** sigue negro con «la más grande», que rota bien entre los tres búferes de pantalla
+      (0x80104000 → 0x8035C000 → 0x80230000: triple búfer). En log_014/015 la escena solo se veía en repintados a
+      mitad del fotograma siguiente: la superficie tiene la escena mientras se dibuja y queda negra al final.
+      *Hipótesis:* una pasada final a pantalla completa la oscurece; el juego usa mezcla `SRC_ALPHA, ZERO`
+      (`302/0`), que da negro si el alfa de nuestro fragment shader sale 0. Prueba: `[HW fs]` anota las
+      pasadas 2D a pantalla completa (mezcla, destino, textura, combiners) y las `302/0` se omiten 5 s sí / 5 s no.
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

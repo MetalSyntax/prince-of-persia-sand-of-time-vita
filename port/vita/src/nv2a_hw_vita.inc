@@ -1010,7 +1010,33 @@ static void ng_draw(const HwVertex *v, uint32_t count)
 {
     VgSurface *s;
     uint32_t i;
-    if (!count || !vg_begin_draw(&s, 0)) return;
+    if (!count) return;
+    if (count <= 6) {
+        /* ponytail: diagnóstico de la imagen negra (log_017): las pasadas 2D que cubren toda la
+         * superficie se anotan ([HW fs]) y las de mezcla SRC_ALPHA,ZERO se omiten 5 s sí, 5 s no.
+         * Quitar cuando se sepa cuál pinta de negro. */
+        float l = 1e9f, r = -1e9f, t = 1e9f, b = -1e9f;
+        for (i = 0; i < count; i++) {
+            if (v[i].pos[0] < l) l = v[i].pos[0];
+            if (v[i].pos[0] > r) r = v[i].pos[0];
+            if (v[i].pos[1] < t) t = v[i].pos[1];
+            if (v[i].pos[1] > b) b = v[i].pos[1];
+        }
+        if (l <= 1 && t <= 1 && r >= 600 && b >= 440) {
+            static unsigned logged;
+            int skip_period = (GetTickCount() / 5000) & 1;
+            int sa_zero = s_gpu.blend_enable && s_gpu.blend_sfactor == 0x302 && s_gpu.blend_dfactor == 0;
+            if (logged++ < 40)
+                fprintf(stderr, "[HW fs] flip %u: superficie 0x%08X, mezcla %d %X/%X, tex0 %s0x%08X fmt 0x%X, "
+                        "combiners 0x%08X final 0x%08X/0x%08X, color_mask 0x%08X%s\n", s_hw.frame,
+                        (unsigned)dma_resolve(s_gpu.color_offset), s_gpu.blend_enable, s_gpu.blend_sfactor,
+                        s_gpu.blend_dfactor, s_gpu.texs[0].valid ? "" : "(no) ", s_gpu.texs[0].offset,
+                        s_gpu.texs[0].color, s_gpu.rc.control, s_gpu.rc.final0, s_gpu.rc.final1,
+                        s_gpu.color_mask, sa_zero && skip_period ? " OMITIDA" : "");
+            if (sa_zero && skip_period) return;
+        }
+    }
+    if (!vg_begin_draw(&s, 0)) return;
     for (i = 0; i < 8; i++) {
         glEnableVertexAttribArray(i);
         glVertexAttribPointer(i, 4, GL_FLOAT, GL_FALSE, sizeof(HwVertex), &v[0].pos[0] + 4 * i);
