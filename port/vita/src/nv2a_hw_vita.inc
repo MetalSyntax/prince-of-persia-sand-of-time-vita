@@ -85,6 +85,7 @@ typedef struct { uint32_t key, ninputs; uint8_t inputs[8]; GLuint vs; } VgVsp;
 static struct {
     int active, ysign, gpu_vsh;
     int gl_thread;   /* el de vglInit: vitaGL no admite GL desde otro */
+    unsigned dxt1_uploads;   /* texturas DXT1 subidas comprimidas */
     GLuint movie;    /* cuadro YUV420P del vídeo Bink (movie_vita.c, FFmpeg) */
     int movie_ok;
     VgVsp vsp[VG_MAX_VSP];
@@ -475,7 +476,7 @@ static void vg_blit(GLuint tex, float x, float y, float w, float h, float fbw, f
 /* Perfil por fotograma (línea "[HW vita] ... fps"): µs en cada parte del backend. Lo que
  * el ejecutor tarda de más ("[KICK] ... executing") es CPU de upstream: lectura de
  * vértices e intérprete de vertex shaders (cpu_vsh). */
-static struct { uint64_t draw, prog_batch, tex, compose, present, verts, depths; } s_prof;
+static struct { uint64_t draw, prog_batch, tex, compose, present, verts, pverts, depths; } s_prof;
 #if defined(RESOT_HW_GLSL)
 #include <time.h>
 static uint64_t vg_now_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u; }
@@ -555,6 +556,11 @@ static int ng_init(const char *backend)
     /* 16 MB de RAM para el runtime (pilas de hilos, archivos); vitaGL toma el resto. Con 32,
      * en la partida quedaban 22 MB sin usar mientras vitaGL se quedaba sin memoria y forzaba
      * recolecciones de segundos (log_011). */
+#if !defined(RESOT_HW_GLSL)
+    /* Pool circular de datos por draw: 12 MB (4 por búfer de pantalla) en vez de 32. Por
+     * fotograma se usan ~2 MB (vértices compactos + constantes) y los 20 MB vuelven a vitaGL. */
+    vglSetCircularPoolSize(12 * 1024 * 1024);
+#endif
     fprintf(stderr, "[HW vita] vglInitExtended (deja 16 MB de RAM al runtime)\n");
     if (!vglInitExtended(0, VG_SCREEN_W, VG_SCREEN_H, 16 * 1024 * 1024, VG_MSAA_NONE)) {
         fprintf(stderr, "[HW vita] vglInitExtended falló: rasterizador por software\n");
@@ -775,6 +781,32 @@ static GLuint vg_texture_body(int stage, VgSurface *target)
         uint32_t extent = t->width > t->height ? t->width : t->height;
         while ((extent >>= 1) != 0) levels++;
     }
+#if !defined(RESOT_HW_GLSL)
+    /* DXT1 tal cual (como THUG-Vita): 8 veces menos memoria que RGBA y sin decodificar en la
+     * CPU. vitaGL lo pasa por el pool circular con sceGxmTransferCopy, que falla en silencio
+     * si el pool no está alineado a 64 (THUG issue #11: texturas negras). DXT3/5 siguen
+     * decodificadas: vitaGL rompe el alfa de DXT5. Solo el nivel 0 (sin mipmaps). */
+    if (!t->cube && d3d8_format_dxt_block_bytes(t->color) == 8 && t->width >= 4 && t->height >= 4) {
+        extern uint8_t *vgl_reserve_data_pool(uint32_t size);
+        uint32_t bytes = ((t->width + 3) / 4) * ((t->height + 3) / 4) * 8, done, mis;
+        uint8_t *blk = (uint8_t *)malloc(bytes);
+        if (!blk) vg_fail("dxt1 copy");
+        for (done = 0; done < bytes; ) {   /* por páginas: la memoria guest va por vvm */
+            uint32_t va = t->offset + done, chunk = 4096 - (va & 4095);
+            if (chunk > bytes - done) chunk = bytes - done;
+            memcpy(blk + done, vvm_ptr(va + (uint32_t)(uintptr_t)xbox_GetMemoryOffset()), chunk);
+            done += chunk;
+        }
+        if ((mis = (uint32_t)(uintptr_t)vgl_reserve_data_pool(0) & 63u) != 0) vgl_reserve_data_pool(64u - mis);
+        glBindTexture(GL_TEXTURE_2D, c->tex);
+        glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_COMPRESSED_RGBA_S3TC_DXT1_EXT,
+                               (GLsizei)t->width, (GLsizei)t->height, 0, (GLsizei)bytes, blk);
+        free(blk);
+        c->guest = *t; c->hash = hash; c->levels = 1; c->checked = c->used = s_hw.frame;
+        s_hw.tex_uploads++; s_vg.dxt1_uploads++;
+        goto bind;
+    }
+#endif
     px = (uint32_t *)malloc((size_t)t->width * t->height * 4);
     if (!px) vg_fail("texture decode allocation");
     glBindTexture(gtarget, c->tex);
@@ -1106,7 +1138,7 @@ static int ng_draw_program_batch_body(void)
 {
     static uint32_t stamp[65536], batch_id;
     static uint16_t remap[65536];
-    static float (*verts)[8][4];
+    static float *verts;   /* compacto: ninputs float4 por vértice (antes 8, 128 B) */
     static uint16_t *idx;
     const uint32_t *words;
     const uint8_t *inputs;
@@ -1121,7 +1153,7 @@ static int ng_draw_program_batch_body(void)
     default:
         return 1;                           /* puntos y líneas: ningún camino los dibuja */
     }
-    if (!nv2a_vsh_pack_gpu(&words, &inputs, &ninputs)) return 0;
+    if (!nv2a_vsh_pack_gpu(&words, &inputs, &ninputs) || !ninputs || ninputs > 8) return 0;
     /* La composición del glow (como ng_draw_program_batch de Android). */
     if (hw_postprocess_candidate(n)) {
         Nv2aVshOutput post[4];
@@ -1136,7 +1168,7 @@ static int ng_draw_program_batch_body(void)
     s_hw.batch_full_width = s_hw.batch_projected_screen = s_hw.batch_hud = 0;
     s_hw.batch_projected_2d = 0;   /* ponytail: sin Hor+ (aspect 4:3); con 16:9 hay que clasificar como Android */
     if (!verts) {
-        verts = malloc(sizeof *verts * NV_MAX_INDICES);
+        verts = malloc(sizeof(float) * 4 * 8 * NV_MAX_INDICES);
         idx = malloc((size_t)NV_MAX_INDICES * 6 + 8);
         if (!verts || !idx) vg_fail("program batch buffers");
     }
@@ -1148,8 +1180,7 @@ static int ng_draw_program_batch_body(void)
         if (stamp[ix] == batch_id) continue;
         stamp[ix] = batch_id;
         remap[ix] = (uint16_t)nv;
-        for (a = 0; a < ninputs; a++) fetch_attr(&s_gpu.attr[inputs[a]], ix, verts[nv][a]);
-        for (; a < 8; a++) verts[nv][a][0] = verts[nv][a][1] = verts[nv][a][2] = verts[nv][a][3] = 0.0f;
+        for (a = 0; a < ninputs; a++) fetch_attr(&s_gpu.attr[inputs[a]], ix, &verts[(nv * ninputs + a) * 4]);
         nv++;
     }
 #define VG_IDX(x, y, z) do { idx[ni] = remap[s_gpu.idx[x]]; idx[ni + 1] = remap[s_gpu.idx[y]]; \
@@ -1183,14 +1214,20 @@ static int ng_draw_program_batch_body(void)
         if (p->u_c >= 0 && p->cgen != cgen) { glUniform4fv(p->u_c, 192, nv2a_vsh_constants()); p->cgen = cgen; }
         if (p->u_fogp >= 0) glUniform4fv(p->u_fogp, 1, fogp);
         for (a = 0; a < 8; a++) {
-            glEnableVertexAttribArray(a);
-            glVertexAttribPointer(a, 4, GL_FLOAT, GL_FALSE, sizeof verts[0], &verts[0][a][0]);
+            if (a < ninputs) {
+                glEnableVertexAttribArray(a);
+                glVertexAttribPointer(a, 4, GL_FLOAT, GL_FALSE, (GLsizei)(ninputs * 16), &verts[a * 4]);
+            } else {   /* sin datos: constante 0, como el relleno de antes */
+                glDisableVertexAttribArray(a);
+                glVertexAttrib4f(a, 0.0f, 0.0f, 0.0f, 0.0f);
+            }
         }
         glDrawElements(GL_TRIANGLES, (GLsizei)ni, GL_UNSIGNED_SHORT, idx);
         if (s_vg.vis_enabled) s_vg.vis_pixels += ni / 3 * 64.0;   /* ponytail: sin área real en la GPU */
         ng_mark(s); s_hw.draws++; s_hw.gpu_vsh_batches++; s_hw.tris += ni / 3;
         s_gpu.tris_drawn += ni / 3; s_gpu.xf_drawn += ni / 3;
         s_hw_stat_verts += nv;
+        s_prof.pverts += nv;
     }
     LeaveCriticalSection(&s_hw.lock);
     return 1;
@@ -1366,13 +1403,13 @@ static void ng_flip(void)
         uint32_t frames = s_hw.frame - last_frame;
         double fr = frames ? (double)frames : 1.0;
         fprintf(stderr, "[HW vita] %.1f fps; %.1f draws/frame; %u shaders; %llu texturas subidas; ms/frame: "
-                "draw %.1f, prog %.1f, tex %.1f, compose %.1f, present %.1f; %.0f vért/frame; %llu depth nuevos; "
+                "draw %.1f, prog %.1f, tex %.1f, compose %.1f, present %.1f; %.0f+%.0f vért/frame; %llu depth nuevos; %u DXT1; "
                 "vitaGL libre VRAM %u KB, RAM %u KB\n",
                 frames * 1000.0 / (now - last_log), frames ? (double)(s_hw.draws - last_draws) / frames : 0,
                 s_vg.nprograms, (unsigned long long)s_hw.tex_uploads,
                 s_prof.draw / 1000.0 / fr, s_prof.prog_batch / 1000.0 / fr, s_prof.tex / 1000.0 / fr,
-                s_prof.compose / 1000.0 / fr, s_prof.present / 1000.0 / fr, s_prof.verts / fr,
-                (unsigned long long)s_prof.depths,
+                s_prof.compose / 1000.0 / fr, s_prof.present / 1000.0 / fr, s_prof.verts / fr, s_prof.pverts / fr,
+                (unsigned long long)s_prof.depths, s_vg.dxt1_uploads,
 #if defined(RESOT_HW_GLSL)
                 0u, 0u);
 #else

@@ -381,6 +381,16 @@ Fases concretas:
       +300 KB/10 s). Cambios: vitaGL deja 16 MB al runtime (antes 32; quedaban 22 MB sin usar); en el log,
       VRAM/RAM libres de vitaGL y depth buffers creados por fotograma (`[HW depth]`), y reservas ≥256 KB del heap
       con su llamador (`[BIG]`). Pendiente según ese log: qué recrea depth buffers y qué llena el heap.
+- [ ] (2026-10-21) **log_012:** vitaGL sin memoria desde el menú (libre VRAM 131 KB, RAM ~1 MB). Al agotarse,
+      vitaGL prueba el heap de newlib (`gpu_alloc_mapped_aligned_*` → `memalign`): 106 peticiones de 1200 KB
+      (640x480x4) y 86 de 300 KB, casi todas fallidas → recolecciones forzadas y 4 s por fotograma en la partida.
+      Menú 2,4–4 fps (`prog` 108–140 ms). Revisado THUG-Vita (iwannagooutside/thug-vita-port): DXT1 subido
+      comprimido con el pool circular alineado a 64 (su issue #11), DXT5 decodificado (vitaGL rompe el alfa), FFmpeg
+      solo con Bink (igual que aquí), tope opcional de 30 fps. Cambios: pool circular 32→12 MB; DXT1 comprimido
+      (8x menos que RGBA, sin decodificar en CPU); batches con vertex programs con vértices compactos (solo los
+      atributos del programa, antes 128 B/vértice). Descartados: `SAMPLERS_SPEEDHACK` (quita la comprobación de
+      samplers sin usar; nuestros shaders tienen huecos, p. ej. tex0+tex2 → crash) y `MATH_SPEEDHACK` (no existe en
+      este vitaGL).
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.
