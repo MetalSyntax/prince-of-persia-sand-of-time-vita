@@ -391,6 +391,15 @@ Fases concretas:
       atributos del programa, antes 128 B/vértice). Descartados: `SAMPLERS_SPEEDHACK` (quita la comprobación de
       samplers sin usar; nuestros shaders tienen huecos, p. ej. tex0+tex2 → crash) y `MATH_SPEEDHACK` (no existe en
       este vitaGL).
+- [ ] (2026-10-21) **log_013:** menú 3–4 fps (`prog` ~100 ms con 30–40 mil vértices); VRAM libre 143 KB; hacia el s 92
+      cada fotograma pide 1200 KB (640x480x4) y 300 KB (320x240x4) por `gpu_alloc_mapped_aligned_for_gpu`: una
+      textura de tamaño pantalla que cambia en cada fotograma se re-creaba con glTexImage2D (memoria nueva, la vieja
+      solo se libera al presentar) → VRAM agotada y negro. Cambios: textura que cambia de contenido pero no de forma
+      → `glTexSubImage2D` en su sitio; texturas opacas decodificadas en RGB565; superficie mostrada = la que el juego
+      presenta (`drawn_offset` vía `xbox_FramebufferWindowSet`), antes «la más grande»; `grab()` (copia 640x480 en
+      CPU en cada flip) desactivado con vitaGL; caché de vértices en VBO para los batches con vertex programs
+      (clave: atributos + rango de índices; huella de 9 muestras por atributo; tope 12 MB; se libera a los 300
+      fotogramas sin uso).
 - [ ] V1.1 Backend GPU sobre vitaGL: empezar por el **menú** (2D simple) y luego el primer nivel.
 - [ ] V1.2 Rendimiento: objetivo ≥ 15–30 fps en el primer nivel; caché de shaders en `ux0:data/pop-sot/`.
 - [ ] ⛔ **GATE 3R.2:** jugabilidad estable (menú + primer nivel a 30 fps) antes de pulir audio/vídeo finales.

@@ -57,6 +57,7 @@ typedef struct {
     GLuint tex;
     Texture guest;
     uint32_t hash, checked, used, levels;
+    uint32_t fmt;                      /* 0 RGBA8888, 1 RGB565 (opaca), 2 DXT1 */
     GLint wrap_s, wrap_t, min, mag;    /* parámetros ya puestos */
 } VgTexture;
 
@@ -772,6 +773,10 @@ static GLuint vg_texture_body(int stage, VgSurface *target)
     if (c && c->checked == s_hw.frame) { c->used = s_hw.frame; goto bind; }
     hash = hw_tex_hash(t);
     if (c && c->hash == hash) { c->checked = c->used = s_hw.frame; goto bind; }
+    /* Misma textura (dirección, tamaño, formato) con contenido nuevo: se actualiza en su sitio.
+     * Re-crearla con glTexImage2D reserva memoria nueva en cada cambio y vitaGL solo libera la
+     * vieja al presentar (log_013: 1200 KB por fotograma hasta agotar la VRAM). */
+    int inplace = c != NULL && !t->cube && c->levels == 1;
     if (!c) c = victim;
     if (!c->tex) glGenTextures(1, &c->tex);
     else if (c->guest.cube != t->cube) { glDeleteTextures(1, &c->tex); glGenTextures(1, &c->tex); }
@@ -802,7 +807,7 @@ static GLuint vg_texture_body(int stage, VgSurface *target)
         glCompressedTexImage2D(GL_TEXTURE_2D, 0, GL_COMPRESSED_RGBA_S3TC_DXT1_EXT,
                                (GLsizei)t->width, (GLsizei)t->height, 0, (GLsizei)bytes, blk);
         free(blk);
-        c->guest = *t; c->hash = hash; c->levels = 1; c->checked = c->used = s_hw.frame;
+        c->guest = *t; c->hash = hash; c->levels = 1; c->fmt = 2; c->checked = c->used = s_hw.frame;
         s_hw.tex_uploads++; s_vg.dxt1_uploads++;
         goto bind;
     }
@@ -817,8 +822,27 @@ static GLuint vg_texture_body(int stage, VgSurface *target)
             /* ARGB -> bytes RGBA */
             px[(size_t)y * t->width + x] = (argb & 0xFF00FF00u) | ((argb >> 16) & 0xFF) | ((argb & 0xFF) << 16);
         }
-        glTexImage2D(t->cube ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + face : GL_TEXTURE_2D, 0, GL_RGBA,
-                     (GLsizei)t->width, (GLsizei)t->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        {
+            size_t np = (size_t)t->width * t->height, k;
+            uint32_t fmt = 1;
+            GLenum target = t->cube ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + face : GL_TEXTURE_2D;
+            for (k = 0; k < np && fmt; k++) if ((px[k] >> 24) != 0xFF) fmt = 0;
+            if (t->cube) fmt = 0;
+            if (fmt) {   /* opaca: RGB565, la mitad de memoria (en el mismo búfer) */
+                uint16_t *d = (uint16_t *)px;
+                for (k = 0; k < np; k++) {
+                    uint32_t v = px[k];
+                    d[k] = (uint16_t)(((v & 0xF8) << 8) | ((v >> 5) & 0x07E0) | ((v >> 19) & 0x1F));
+                }
+            }
+            if (inplace && c->fmt == fmt && c->guest.width == t->width && c->guest.height == t->height && levels == 1)
+                glTexSubImage2D(target, 0, 0, 0, (GLsizei)t->width, (GLsizei)t->height,
+                                fmt ? GL_RGB : GL_RGBA, fmt ? GL_UNSIGNED_SHORT_5_6_5 : GL_UNSIGNED_BYTE, px);
+            else
+                glTexImage2D(target, 0, fmt ? GL_RGB : GL_RGBA, (GLsizei)t->width, (GLsizei)t->height, 0,
+                             fmt ? GL_RGB : GL_RGBA, fmt ? GL_UNSIGNED_SHORT_5_6_5 : GL_UNSIGNED_BYTE, px);
+            c->fmt = fmt;
+        }
     }
     free(px);
     if (levels > 1) glGenerateMipmap(gtarget);
@@ -1134,6 +1158,129 @@ static uint32_t vg_vsp_get(const uint8_t *inputs, uint32_t ninputs)
     return seen = e->vs ? (uint32_t)(e - s_vg.vsp) + 1 : 0;
 }
 
+#if !defined(RESOT_HW_GLSL)
+/* Caché de vértices de los batches con vertex programs (VBO de vitaGL).
+ *
+ * La geometría del nivel apenas cambia entre fotogramas, pero cada draw volvía a leer y
+ * convertir todos sus vértices de la memoria guest (fetch_attr) y vitaGL los volvía a
+ * copiar: ~100 ms por fotograma con 30-40 mil vértices (log_013). Aquí el rango de
+ * índices [min, max] de cada draw se convierte una vez a un VBO, identificado por los
+ * atributos (dirección, formato, stride), el rango y una huella de muestras del
+ * contenido: si la malla cambia (animada en la CPU) la huella cambia y se reconvierte.
+ * Tope de memoria: VC_BUDGET; lo que lleva VC_IDLE fotogramas sin usarse se libera. */
+#define VC_SLOTS  2048
+#define VC_BUDGET (12u << 20)
+#define VC_IDLE   300
+typedef struct {
+    uint32_t key, hash, imin, span, ninputs, bytes, used;
+    GLuint vbo;
+} VgVCache;
+static VgVCache s_vc[VC_SLOTS];
+static uint32_t s_vc_bytes, s_vc_hits, s_vc_builds;
+
+static int vg_vcache_draw(uint32_t n, const uint8_t *inputs, uint32_t ninputs, uint32_t vsp)
+{
+    static float *build;
+    static uint16_t *idx;
+    const uint8_t *mem = (const uint8_t *)xbox_GetMemoryOffset();
+    uint32_t imin = 0xFFFFu, imax = 0, i, a, k, span, key = 2166136261u, hash = 2166136261u, ni = 0;
+    VgVCache *e = NULL, *victim = NULL;
+    VgSurface *s;
+    VgProgram *p;
+    if (s_gpu.inline_active) return 0;
+    for (i = 0; i < n; i++) { uint32_t ix = s_gpu.idx[i]; if (ix < imin) imin = ix; if (ix > imax) imax = ix; }
+    span = imax - imin + 1;
+    if (span > 4 * n + 64) return 0;   /* rango disperso: no compensa */
+    for (a = 0; a < ninputs; a++) {
+        const VertexAttr *at = &s_gpu.attr[inputs[a]];
+        if (!at->size || !at->stride || !at->offset) return 0;   /* valor fijo de SET_VERTEX_DATA */
+        key = (key ^ at->offset) * 16777619u; key = (key ^ (at->type | at->size << 8 | at->stride << 16)) * 16777619u;
+        for (k = 0; k <= 8; k++) {
+            uint32_t ix = k == 8 ? imax : imin + k * span / 8;
+            hash = (hash ^ *(const uint32_t *)(mem + at->offset + (size_t)ix * at->stride)) * 16777619u;
+        }
+    }
+    key = (key ^ imin) * 16777619u; key = (key ^ span) * 16777619u; key = (key ^ ninputs) * 16777619u;
+    for (k = 0; k < 8; k++) {
+        VgVCache *c = &s_vc[(key + k) & (VC_SLOTS - 1)];
+        if (c->vbo && c->key == key && c->imin == imin && c->span == span && c->ninputs == ninputs) { e = c; break; }
+        if (!victim || !c->vbo || (victim->vbo && c->used < victim->used)) victim = c;
+    }
+    if (!e || e->hash != hash) {
+        uint32_t bytes = span * ninputs * 16;
+        if (!e) {
+            e = victim;
+            if (e->vbo && s_hw.frame - e->used < VC_IDLE && s_vc_bytes + bytes > VC_BUDGET) return 0;
+        }
+        if (s_vc_bytes - e->bytes + bytes > VC_BUDGET) return 0;   /* sin presupuesto: ruta normal */
+        if (!build) {
+            build = (float *)malloc(sizeof(float) * 4 * 8 * NV_MAX_INDICES);
+            if (!build) return 0;
+        }
+        for (i = 0; i < span; i++)
+            for (a = 0; a < ninputs; a++) fetch_attr(&s_gpu.attr[inputs[a]], imin + i, &build[(i * ninputs + a) * 4]);
+        if (!e->vbo) glGenBuffers(1, &e->vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, e->vbo);
+        glBufferData(GL_ARRAY_BUFFER, bytes, build, GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        s_vc_bytes = s_vc_bytes - e->bytes + bytes;
+        e->key = key; e->hash = hash; e->imin = imin; e->span = span; e->ninputs = ninputs; e->bytes = bytes;
+        s_vc_builds++;
+    } else {
+        s_vc_hits++;
+    }
+    e->used = s_hw.frame;
+    if (!idx && !(idx = (uint16_t *)malloc((size_t)NV_MAX_INDICES * 6 + 8))) return 0;
+#define VC_IDX(x, y, z) do { idx[ni] = (uint16_t)(s_gpu.idx[x] - imin); idx[ni + 1] = (uint16_t)(s_gpu.idx[y] - imin); \
+        idx[ni + 2] = (uint16_t)(s_gpu.idx[z] - imin); ni += 3; } while (0)
+    switch (s_gpu.prim) {
+    case NV_PRIM_TRIANGLES:      for (i = 0; i + 2 < n; i += 3) VC_IDX(i, i + 1, i + 2); break;
+    case NV_PRIM_TRIANGLE_STRIP: for (i = 0; i + 2 < n; i++) { if (i & 1) VC_IDX(i + 1, i, i + 2); else VC_IDX(i, i + 1, i + 2); } break;
+    case NV_PRIM_TRIANGLE_FAN:
+    case NV_PRIM_POLYGON:        for (i = 1; i + 1 < n; i++) VC_IDX(0, i, i + 1); break;
+    case NV_PRIM_QUADS:          for (i = 0; i + 3 < n; i += 4) { VC_IDX(i, i + 1, i + 2); VC_IDX(i, i + 2, i + 3); } break;
+    default:                     for (i = 0; i + 3 < n; i += 2) { VC_IDX(i, i + 1, i + 3); VC_IDX(i, i + 3, i + 2); } break;
+    }
+#undef VC_IDX
+    if (ni && (p = vg_begin_draw(&s, vsp)) != NULL) {
+        float fogp[4] = { s_gpu.fog_param[0], s_gpu.fog_param[1], (float)s_gpu.fog_mode, s_gpu.fog_enable ? 1.0f : 0.0f };
+        uint32_t cgen = nv2a_vsh_constant_generation();
+        if (p->u_c >= 0 && p->cgen != cgen) { glUniform4fv(p->u_c, 192, nv2a_vsh_constants()); p->cgen = cgen; }
+        if (p->u_fogp >= 0) glUniform4fv(p->u_fogp, 1, fogp);
+        glBindBuffer(GL_ARRAY_BUFFER, e->vbo);
+        for (a = 0; a < 8; a++) {
+            if (a < ninputs) {
+                glEnableVertexAttribArray(a);
+                glVertexAttribPointer(a, 4, GL_FLOAT, GL_FALSE, (GLsizei)(ninputs * 16), (const void *)(uintptr_t)(a * 16));
+            } else {
+                glDisableVertexAttribArray(a);
+                glVertexAttrib4f(a, 0.0f, 0.0f, 0.0f, 0.0f);
+            }
+        }
+        glDrawElements(GL_TRIANGLES, (GLsizei)ni, GL_UNSIGNED_SHORT, idx);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        if (s_vg.vis_enabled) s_vg.vis_pixels += ni / 3 * 64.0;
+        ng_mark(s); s_hw.draws++; s_hw.gpu_vsh_batches++; s_hw.tris += ni / 3;
+        s_gpu.tris_drawn += ni / 3; s_gpu.xf_drawn += ni / 3;
+        s_hw_stat_verts += span;
+        s_prof.pverts += span;
+    }
+    return 1;
+}
+
+/* Fin de fotograma: libera lo que lleva VC_IDLE fotogramas sin usarse. */
+static void vg_vcache_trim(void)
+{
+    uint32_t i;
+    for (i = 0; i < VC_SLOTS; i++)
+        if (s_vc[i].vbo && s_hw.frame - s_vc[i].used > VC_IDLE) {
+            glDeleteBuffers(1, &s_vc[i].vbo);
+            s_vc_bytes -= s_vc[i].bytes;
+            memset(&s_vc[i], 0, sizeof s_vc[i]);
+        }
+}
+#endif
+
 static int ng_draw_program_batch_body(void)
 {
     static uint32_t stamp[65536], batch_id;
@@ -1174,6 +1321,9 @@ static int ng_draw_program_batch_body(void)
     }
     EnterCriticalSection(&s_hw.lock);
     if (!(vsp = vg_vsp_get(inputs, ninputs))) { LeaveCriticalSection(&s_hw.lock); return 0; }
+#if !defined(RESOT_HW_GLSL)
+    if (vg_vcache_draw(n, inputs, ninputs, vsp)) { LeaveCriticalSection(&s_hw.lock); return 1; }
+#endif
     if (++batch_id == 0) { memset(stamp, 0, sizeof stamp); batch_id = 1; }
     for (i = 0; i < n; i++) {
         uint16_t ix = s_gpu.idx[i];
@@ -1390,8 +1540,20 @@ static void ng_flip(void)
     DWORD now;
     if (s_hw.pending_present) nv2a_hw_flush_present();
     EnterCriticalSection(&s_hw.lock);
-    if (s_vg.largest) s_vg.front = s_vg.largest;
+    {   /* la superficie que el juego presenta (drawn_offset en el flip); si no, la más grande */
+        extern uint32_t vita_fb_presented(void);
+        uint32_t va = vita_fb_presented(), i;
+        VgSurface *pick = NULL;
+        for (i = 0; va && i < HW_MAX_SURFACES; i++)
+            if (s_vg.surfaces[i].fbo && s_vg.surfaces[i].offset == va && (!pick || s_vg.surfaces[i].frame > pick->frame))
+                pick = &s_vg.surfaces[i];
+        if (pick) s_vg.front = pick;
+        else if (s_vg.largest) s_vg.front = s_vg.largest;
+    }
     s_vg.largest = NULL; s_hw.frame++;
+#if !defined(RESOT_HW_GLSL)
+    if ((s_hw.frame & 63) == 0) vg_vcache_trim();
+#endif
     if (s_hw.frame <= 40 || (s_hw.frame & 255) == 0)
         fprintf(stderr, "[HW vita] flip %u: front %ux%u, %llu draws, %llu texturas\n", s_hw.frame,
                 s_vg.front ? s_vg.front->w : 0, s_vg.front ? s_vg.front->h : 0,
@@ -1404,12 +1566,18 @@ static void ng_flip(void)
         double fr = frames ? (double)frames : 1.0;
         fprintf(stderr, "[HW vita] %.1f fps; %.1f draws/frame; %u shaders; %llu texturas subidas; ms/frame: "
                 "draw %.1f, prog %.1f, tex %.1f, compose %.1f, present %.1f; %.0f+%.0f vért/frame; %llu depth nuevos; %u DXT1; "
+                "VBO %u KB (%u reusos, %u conversiones); "
                 "vitaGL libre VRAM %u KB, RAM %u KB\n",
                 frames * 1000.0 / (now - last_log), frames ? (double)(s_hw.draws - last_draws) / frames : 0,
                 s_vg.nprograms, (unsigned long long)s_hw.tex_uploads,
                 s_prof.draw / 1000.0 / fr, s_prof.prog_batch / 1000.0 / fr, s_prof.tex / 1000.0 / fr,
                 s_prof.compose / 1000.0 / fr, s_prof.present / 1000.0 / fr, s_prof.verts / fr, s_prof.pverts / fr,
                 (unsigned long long)s_prof.depths, s_vg.dxt1_uploads,
+#if defined(RESOT_HW_GLSL)
+                0u, 0u, 0u,
+#else
+                s_vc_bytes >> 10, s_vc_hits, s_vc_builds,
+#endif
 #if defined(RESOT_HW_GLSL)
                 0u, 0u);
 #else

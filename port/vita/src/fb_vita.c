@@ -271,8 +271,11 @@ void vita_gl_idle_tick(void)
 /* ── la interfaz de video/fb_present.c ─────────────────────── */
 
 void xbox_FramebufferWindowSet(uint32_t fb_va, uint32_t pitch) { s_fb_va = fb_va; s_fb_pitch = pitch; }
+/* El búfer que el juego terminó en el último flip: el que muestra el backend vitaGL. */
+uint32_t vita_fb_presented(void) { return s_fb_va; }
 void xbox_FramebufferWindowPresent(uint32_t fb_va, uint32_t pitch)
 {
+    if (s_hw_mode) return;   /* vitaGL pinta desde sus superficies: copiar 640x480 en la CPU sobraba */
     if (!fb_va) { fb_va = s_fb_va; pitch = s_fb_pitch; }
     grab(fb_va, pitch);
 }
