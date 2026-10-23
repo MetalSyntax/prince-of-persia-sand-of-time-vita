@@ -596,9 +596,9 @@ static int ng_init(const char *backend)
      * en la partida quedaban 22 MB sin usar mientras vitaGL se quedaba sin memoria y forzaba
      * recolecciones de segundos (log_011). */
 #if !defined(RESOT_HW_GLSL)
-    /* Pool circular de datos por draw: 6 MB (2 por búfer de pantalla) en vez de 32. Por
-     * fotograma se usan ~2 MB (vértices compactos + constantes) y el resto queda para vitaGL. */
-    vglSetCircularPoolSize(12 * 1024 * 1024);
+    /* Pool circular de datos por draw: 20 MB (~6.6 MB por búfer de pantalla) para evitar
+     * sobrepasos (log_067: pico medido 5.6 MB por frame con geometría e índices del menú). */
+    vglSetCircularPoolSize(20 * 1024 * 1024);
 #endif
     fprintf(stderr, "[HW vita] vglInitExtended (deja 16 MB de RAM al runtime)\n");
     if (!vglInitExtended(0, VG_SCREEN_W, VG_SCREEN_H, 16 * 1024 * 1024, VG_MSAA_NONE)) {
@@ -611,6 +611,17 @@ static int ng_init(const char *backend)
     s_vg.ysign = (flip && *flip ? atoi(flip) : VG_RT_FLIP_DEFAULT) ? -1 : 1;
     s_vg.gpu_vsh = !(getenv("RECOMP_VITA_CPU_VSH") && atoi(getenv("RECOMP_VITA_CPU_VSH")));
     vg_blit_init();
+    {
+        const char *scale_env = getenv("RECOMP_RENDER_PERCENT");
+        if (!scale_env) scale_env = getenv("RECOMP_RENDER_SCALE");
+        if (scale_env && atoi(scale_env)) {
+            int pct = atoi(scale_env);
+            if (pct == 50 || pct == 75 || pct == 100) {
+                xbox_SetRenderScalePercent(pct);
+                fprintf(stderr, "[HW vita] escalado de render inicial: %d%%\n", pct);
+            }
+        }
+    }
     glGenTextures(1, &s_vg.white);
     glBindTexture(GL_TEXTURE_2D, s_vg.white);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
@@ -780,6 +791,27 @@ static void vg_sampler(VgTexture *c, const Texture *t, GLenum target)
     if (c->mag != fmag) { glTexParameteri(target, GL_TEXTURE_MAG_FILTER, fmag); c->mag = fmag; }
 }
 
+static uint32_t vg_tex_hash(const Texture *t)
+{
+    uint32_t bytes = t->cube ? 6 * tex_face_stride(t) : hw_tex_bytes(t);
+    uint32_t n = bytes / 4, step = n > 2048 ? n / 2048 : 1, i;
+    uint32_t h = 2166136261u;
+    uint32_t mem_off = (uint32_t)(uintptr_t)xbox_GetMemoryOffset();
+    for (i = 0; i < n; i += step) {
+        uint32_t va = t->offset + i * 4;
+        const uint32_t *p = (const uint32_t *)vvm_ptr(va + mem_off);
+        h = (h ^ *p) * 16777619u;
+    }
+    if (t->palette) {
+        for (i = 0; i < 256; i += 8) {
+            uint32_t va = t->palette + i * 4;
+            const uint32_t *p = (const uint32_t *)vvm_ptr(va + mem_off);
+            h = (h ^ *p) * 16777619u;
+        }
+    }
+    return h;
+}
+
 /* La textura de la etapa: un render target por offset, o la decodificada de
  * memoria guest (sample_tex, como el rasterizador por software) en caché. */
 static GLuint vg_texture(int stage, VgSurface *target)
@@ -814,9 +846,10 @@ static GLuint vg_texture(int stage, VgSurface *target)
             g->palette == t->palette && g->cube == t->cube && g->levels == t->levels) { c = e; break; }
         if (!victim || !e->tex || (victim->tex && e->used < victim->used)) victim = e;
     }
-    /* el contenido se comprueba cada 3 fotogramas (antes en cada uno: ~15 ms con 125 texturas) */
-    if (c && s_hw.frame - c->checked < 3) { c->used = s_hw.frame; goto bind; }
-    hash = hw_tex_hash(t);
+    /* el contenido se comprueba una vez por fotograma, como upstream: cada 3 se veía 1-2 fotogramas
+     * la textura vieja cuando el juego reutiliza la dirección (suelo rojo, luz azul intermitentes) */
+    if (c && c->checked == s_hw.frame) { c->used = s_hw.frame; goto bind; }
+    hash = vg_tex_hash(t);
     if (c && c->hash == hash) { c->checked = c->used = s_hw.frame; goto bind; }
     /* Misma textura (dirección, tamaño, formato) con contenido nuevo: se actualiza en su sitio.
      * Re-crearla con glTexImage2D reserva memoria nueva en cada cambio y vitaGL solo libera la
@@ -938,6 +971,16 @@ static void vg_state(VgSurface *s, GLuint depth)
     if (blend) {
         GLenum src = vg_factor(s_gpu.blend_sfactor), dst = vg_factor(s_gpu.blend_dfactor);
         GLenum op = s_gpu.blend_equation;
+        {   /* ponytail: diagnóstico temporal, combinaciones de mezcla distintas */
+            static uint32_t seen[64], nseen;
+            uint32_t sig = s_gpu.blend_sfactor << 16 ^ s_gpu.blend_dfactor ^ op << 8, j;
+            for (j = 0; j < nseen && seen[j] != sig; j++) {}
+            if (j == nseen && nseen < 64) {
+                seen[nseen++] = sig;
+                fprintf(stderr, "[HW blend] src 0x%X dst 0x%X op 0x%X const 0x%08X (frame %u)\n", s_gpu.blend_sfactor,
+                        s_gpu.blend_dfactor, op, s_gpu.blend_color, s_hw.frame);
+            }
+        }
         glEnable(GL_BLEND);
         glBlendFuncSeparate(src, dst, src, dst);
         glBlendEquation(op == 0x800A || op == 0x800B || op == 0x8007 || op == 0x8008 ? op : GL_FUNC_ADD);
@@ -1465,6 +1508,7 @@ static void ng_clear(uint32_t param)
             glUseProgram(s_vg.fill);
             glUniform4fv(s_vg.fill_col, 1, color);
             vg_quad(0, 0, 1, 1, 1, 1);   /* NDC completo; el scissor recorta */
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         }
     }
     s_gpu.clears++;

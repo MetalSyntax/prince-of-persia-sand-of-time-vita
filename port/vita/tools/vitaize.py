@@ -171,6 +171,22 @@ ANCHORS = {
         ("xbox_FramebufferWindowFrameStats((uint32_t)(s_hw.draws - draws_at_flip));\n"
          "            draws_at_flip = s_hw.draws;\n",
          "xbox_FramebufferWindowFrameStats(0); (void)draws_at_flip;\n"),
+        ("        if (!a->offset)\n            return 0;\n        p = mem + a->offset + (size_t)index * a->stride;\n",
+         "        if (!a->offset)\n            return 0;\n        p = (const uint8_t *)vvm_ptr(a->offset + (uint32_t)(uintptr_t)mem) + (size_t)index * a->stride;\n"),
+        ("static int sample_tex(const Texture *t, uint32_t face_offset,\n"
+         "                      uint32_t u, uint32_t v, uint32_t *argb)\n"
+         "{\n"
+         "    const uint8_t *mem = (const uint8_t *)xbox_GetMemoryOffset();\n"
+         "    const uint8_t *p;\n"
+         "    uint32_t fmt, base = t->offset + face_offset;\n",
+         "static int sample_tex(const Texture *t, uint32_t face_offset,\n"
+         "                      uint32_t u, uint32_t v, uint32_t *argb)\n"
+         "{\n"
+         "    uint32_t fmt, base = t->offset + face_offset;\n"
+         "    const uint8_t *mem = (const uint8_t *)vvm_ptr(base + (uint32_t)(uintptr_t)xbox_GetMemoryOffset()) - base;\n"
+         "    const uint8_t *p;\n"),
+        ("        *argb = ((const uint32_t *)(mem + t->palette))[p[u]];\n",
+         "        *argb = ((const uint32_t *)vvm_ptr(t->palette + (uint32_t)(uintptr_t)xbox_GetMemoryOffset()))[p[u]];\n"),
     ],
     "guest_probe.h": [
         ("memcpy(value,(const void *)((uintptr_t)offset+a),sizeof *value);",
@@ -205,6 +221,90 @@ ANCHORS = {
          "        if (h && h != INVALID_HANDLE_VALUE)\n            GetFileSizeEx(h, &size);\n"
          "        { extern void vita_partition_length(HANDLE, LARGE_INTEGER *); vita_partition_length(h, &size); }\n"
          "        BRIDGE_MEM32(out_va +  0) = 0;                       /* StartingOffset */\n"),
+        # reSOT Vita: evitar saturar CPU 0 con 1000 ciclos/s y 32k bloqueos de sección crítica
+        ("        Sleep(1);              /* RE-SoT: was 10; the vblank clock needs 1 ms */\n"
+         "        kernel_vblank_tick();  /* the GPU's frame clock */\n"
+         "        /* RE-SoT: DPCs and timer DPCs wait while the title is at raised IRQL. */\n"
+         "        disp = kernel_dispatch_enter();\n"
+         "        if (disp)\n"
+         "            kernel_drain_dpcs();   /* deferred work, before due timers */\n"
+         "        now = (long long)GetTickCount64();\n\n"
+         "        for (i = 0; i < XBOX_MAX_TIMERS; i++) {\n"
+         "            uint32_t dpc, fired_va;\n\n"
+         "            EnterCriticalSection(&g_timer_lock);\n"
+         "            if (!g_timers[i].timer_va || now < g_timers[i].due_ms\n"
+         "                || (!disp && g_timers[i].dpc_va)) {\n"
+         "                LeaveCriticalSection(&g_timer_lock);\n"
+         "                continue;\n"
+         "            }\n"
+         "            fired_va = g_timers[i].timer_va;\n"
+         "            dpc = g_timers[i].dpc_va;\n"
+         "            if (g_timers[i].period_ms > 0)\n"
+         "                g_timers[i].due_ms = now + g_timers[i].period_ms;\n"
+         "            else\n"
+         "                g_timers[i].timer_va = 0;      /* one-shot, done */\n"
+         "            LeaveCriticalSection(&g_timer_lock);",
+         "        Sleep(3);              /* reSOT Vita: 3 ms en lugar de 1 ms evita saturar CPU */\n"
+         "        kernel_vblank_tick();  /* the GPU's frame clock */\n"
+         "        /* RE-SoT: DPCs and timer DPCs wait while the title is at raised IRQL. */\n"
+         "        disp = kernel_dispatch_enter();\n"
+         "        if (disp)\n"
+         "            kernel_drain_dpcs();   /* deferred work, before due timers */\n"
+         "        now = (long long)GetTickCount64();\n\n"
+         "        for (i = 0; i < XBOX_MAX_TIMERS; i++) {\n"
+         "            uint32_t dpc = 0, fired_va = 0;\n\n"
+         "            if (!g_timers[i].timer_va || now < g_timers[i].due_ms\n"
+         "                || (!disp && g_timers[i].dpc_va))\n"
+         "                continue;\n\n"
+         "            EnterCriticalSection(&g_timer_lock);\n"
+         "            if (g_timers[i].timer_va && now >= g_timers[i].due_ms\n"
+         "                && (disp || !g_timers[i].dpc_va)) {\n"
+         "                fired_va = g_timers[i].timer_va;\n"
+         "                dpc = g_timers[i].dpc_va;\n"
+         "                if (g_timers[i].period_ms > 0)\n"
+         "                    g_timers[i].due_ms = now + g_timers[i].period_ms;\n"
+         "                else\n"
+         "                    g_timers[i].timer_va = 0;\n"
+         "            }\n"
+         "            LeaveCriticalSection(&g_timer_lock);\n"
+         "            if (!fired_va)\n"
+         "                continue;"),
+    ],
+    "kernel_rtl.c": [
+        # reSOT Vita: caché TLS para xbox_cs_shadow evitando contención de SRWLock en 1.6M de llamadas
+        ("    /* Shared pass first: after start-up almost every call finds an existing\n"
+         "     * entry, and taking the table exclusively for each of those would put a\n"
+         "     * global serialisation point in front of the title's own locks. */\n"
+         "    AcquireSRWLockShared(&g_cs_table_lock);\n"
+         "    for (i = 0; i < XBOX_CS_TABLE_SIZE; i++) {\n"
+         "        XBOX_CS_SLOT* slot = &g_cs_table[(home + i) % XBOX_CS_TABLE_SIZE];\n"
+         "        if (slot->key == key) { found = &slot->cs; break; }\n"
+         "        if (slot->key == 0) break;\n"
+         "    }\n"
+         "    ReleaseSRWLockShared(&g_cs_table_lock);\n"
+         "    if (found)\n"
+         "        return found;\n",
+         "    static RECOMP_TLS struct { uintptr_t k; CRITICAL_SECTION *cs; } s_cs_tls[4];\n"
+         "    for (i = 0; i < 4; i++) {\n"
+         "        if (s_cs_tls[i].k == key) return s_cs_tls[i].cs;\n"
+         "    }\n"
+         "    /* Shared pass first: after start-up almost every call finds an existing\n"
+         "     * entry, and taking the table exclusively for each of those would put a\n"
+         "     * global serialisation point in front of the title's own locks. */\n"
+         "    AcquireSRWLockShared(&g_cs_table_lock);\n"
+         "    for (i = 0; i < XBOX_CS_TABLE_SIZE; i++) {\n"
+         "        XBOX_CS_SLOT* slot = &g_cs_table[(home + i) % XBOX_CS_TABLE_SIZE];\n"
+         "        if (slot->key == key) { found = &slot->cs; break; }\n"
+         "        if (slot->key == 0) break;\n"
+         "    }\n"
+         "    ReleaseSRWLockShared(&g_cs_table_lock);\n"
+         "    if (found) {\n"
+         "        static RECOMP_TLS int s_cidx;\n"
+         "        s_cs_tls[s_cidx & 3].k = key;\n"
+         "        s_cs_tls[s_cidx & 3].cs = found;\n"
+         "        s_cidx++;\n"
+         "        return found;\n"
+         "    }\n"),
     ],
     "win32_compat.c": [
         ("    if (stackSize < (8u << 20))\n        stackSize = 8u << 20;\n",

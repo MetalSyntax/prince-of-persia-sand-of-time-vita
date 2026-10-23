@@ -37,6 +37,9 @@ __pycache__/
 *.pyc
 .vscode/
 .idea/
+*.png
+*.jpg
+*.jpeg
 
 # vitaGL vendorizado: artefactos de su make
 /port/vita/vendor/vitaGL/**/*.o
