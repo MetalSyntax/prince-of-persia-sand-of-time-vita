@@ -3,6 +3,7 @@
 > Plan ejecutable por IA, paso a paso. Formato: `- [ ]` pendiente · `- [x] (AAAA-MM-DD) evidencia` hecho.
 > ⛔ **GATE** = punto de decisión: si falla, la IA para y reporta al usuario con evidencia.
 > Fuente de verdad del estado del port. Reglas de trabajo en `CLAUDE.md`.
+> **Mapa actual y plan hasta jugable (2026-11-04): [`MAPA_Y_PLAN_JUGABLE.md`](MAPA_Y_PLAN_JUGABLE.md)** (rePOP v0.5.0).
 
 ## 0. Resumen honesto (2026-10-09)
 

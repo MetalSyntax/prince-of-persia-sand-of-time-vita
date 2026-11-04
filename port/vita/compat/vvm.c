@@ -34,6 +34,8 @@ size_t view_take(const void *addr);
 #define CONTIG_VA 0x80000000u
 
 int32_t vvm_pt[VVM_PAGES];
+uint32_t vvm_gen_base, vvm_gen_lim;
+extern ptrdiff_t g_xbox_mem_offset;
 uint32_t vvm_ram_lo, vvm_ram_size;
 
 static uint8_t  *s_block;            /* B */
@@ -51,7 +53,7 @@ static size_t    s_committed;
  * contiguo lo que el guest ve contiguo; más allá, tramos sueltos (con aviso).
  * ponytail: tamaño fijo; subirlo si el log muestra "fuera de la arena". */
 #ifndef VVM_EXT_ARENA_MB
-#define VVM_EXT_ARENA_MB 32   /* pico medido hasta el menú: 18,5 MB */
+#define VVM_EXT_ARENA_MB 24   /* pico medido: 18,6 MB (log_020..033); 24 deja sitio a la ventana contigua en RAM */
 #endif
 #define EXT_ARENA ((uint32_t)VVM_EXT_ARENA_MB << 20)
 static uint32_t  s_ext_host, s_ext_size, s_ext_peak;
@@ -244,7 +246,12 @@ HANDLE CreateFileMappingA(HANDLE file, LPSECURITY_ATTRIBUTES sa, DWORD protect,
         m->backing = (uint8_t *)(uintptr_t)s_h;   /* la RAM: la primera que crea el layout */
     } else {
 #ifdef __vita__
-        if (s_mappings == 2 && maxSizeLow >= (32u << 20)) {
+        /* RECOMP_VITA_CONTIG_RAM=1 (solo env.txt): la ventana en RAM con caché. No cabe: deja a vitaGL
+         * sin RAM y cae al rasterizador por software (log_037, PERF_PLAN.md C1). */
+        const char *cram = getenv("RECOMP_VITA_CONTIG_RAM");
+        if (cram && atoi(cram))
+            fprintf(stderr, "[VVM] RECOMP_VITA_CONTIG_RAM: ventana contigua en RAM con caché\n");
+        else if (s_mappings == 2 && maxSizeLow >= (32u << 20)) {
             SceSize cd_align = 0x40000;
             SceSize cd_sz = (SceSize)((maxSizeLow + cd_align - 1) & ~(size_t)(cd_align - 1));
             SceUID cid = sceKernelAllocMemBlock("pop-contig", SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW, cd_sz, NULL);
@@ -324,6 +331,7 @@ long syscall(long number, ...) { (void)number; return -1; }
 int vvm_fastpath_enable(void)
 {
     uint32_t p;
+    vvm_gen_base = (uint32_t)g_xbox_mem_offset;   /* XBOX_PTR, con o sin atajo */
     for (p = s_h >> VVM_PAGE_SHIFT; p < (s_h + RAM_SIZE) >> VVM_PAGE_SHIFT; p++)
         if (vvm_pt[p]) {
             fprintf(stderr, "[VVM] atajo de RAM desactivado: la página 0x%08X tiene desplazamiento\n", p << VVM_PAGE_SHIFT);
@@ -332,5 +340,7 @@ int vvm_fastpath_enable(void)
     vvm_ram_lo = s_h;
     vvm_ram_size = RAM_SIZE;
     fprintf(stderr, "[VVM] atajo de RAM activo (0x%08X, 64 MB sin tabla)\n", s_h);
+    if (vvm_gen_base == s_h) vvm_gen_lim = RAM_SIZE;
+    else fprintf(stderr, "[VVM] XBOX_PTR sin atajo: g_xbox_mem_offset 0x%08X != 0x%08X\n", vvm_gen_base, s_h);
     return 1;
 }

@@ -242,3 +242,69 @@ __attribute__((constructor)) static void install_crash_handler(void)
     sigaction(SIGFPE, &sa, NULL);
     sigaction(SIGABRT, &sa, NULL);
 }
+
+/* ── perfilador por muestreo del hilo del juego (HOSTTEST_PROF=1) ──
+ * Un hilo manda SIGPROF a game_main cada HOSTTEST_PROF_US (por defecto 1000 µs de reloj) y el
+ * manejador cuenta pares (pc, lr). Cada 10 s se reescribe DATA_DIR/logs/prof_game_main.txt;
+ * hosttest/run.sh prof lo traduce a funciones (hosttest/prof_report.py).
+ * ponytail: la CPU armv7 se emula (qemu): el orden de las funciones calientes vale para elegir
+ * qué decompilar; los porcentajes exactos se confirman en la consola. */
+#define PROF_SLOTS (1u << 16)
+static struct { uint32_t pc, lr, n; } s_prof[PROF_SLOTS];
+static pthread_t s_prof_game;
+static unsigned long s_prof_samples, s_prof_lost;
+
+static void prof_signal(int sig, siginfo_t *si, void *ctx)
+{
+    ucontext_t *uc = ctx;
+    uint32_t pc = uc->uc_mcontext.arm_pc, lr = uc->uc_mcontext.arm_lr;
+    uint32_t h = (pc * 2654435761u ^ lr * 40503u) & (PROF_SLOTS - 1);
+    (void)sig; (void)si;
+    for (unsigned i = 0; i < 64; i++, h = (h + 1) & (PROF_SLOTS - 1)) {
+        if (s_prof[h].n && (s_prof[h].pc != pc || s_prof[h].lr != lr)) continue;
+        s_prof[h].pc = pc; s_prof[h].lr = lr; s_prof[h].n++; s_prof_samples++;
+        return;
+    }
+    s_prof_lost++;
+}
+void hosttest_prof_dump(void)
+{
+    FILE *f = fopen(DATA_DIR "/logs/prof_game_main.txt", "w");
+    if (!f) return;
+    /* ancla: dirección en ejecución de esta función, para restar la base del PIE con nm */
+    fprintf(f, "# anchor hosttest_prof_dump 0x%08x samples %lu lost %lu\n",
+            (uint32_t)(uintptr_t)hosttest_prof_dump, s_prof_samples, s_prof_lost);
+    for (unsigned i = 0; i < PROF_SLOTS; i++)
+        if (s_prof[i].n) fprintf(f, "%08x %08x %u\n", s_prof[i].pc, s_prof[i].lr, s_prof[i].n);
+    fclose(f);
+}
+static void *prof_sampler(void *arg)
+{
+    const char *e = getenv("HOSTTEST_PROF_US");
+    struct timespec ts = { 0, (e ? atol(e) : 1000) * 1000L };
+    unsigned long ticks = 0, per_dump = 10000000000UL / (unsigned long)ts.tv_nsec;
+    (void)arg;
+    for (;;) {
+        nanosleep(&ts, NULL);
+        pthread_kill(s_prof_game, SIGPROF);
+        if (++ticks % per_dump == 0) hosttest_prof_dump();
+    }
+    return NULL;
+}
+/* main_vita.c: lo llama el hilo game_main al empezar. */
+void hosttest_prof_register(void)
+{
+    struct sigaction sa;
+    pthread_t t;
+    if (!getenv("HOSTTEST_PROF")) return;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = prof_signal;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigaction(SIGPROF, &sa, NULL);
+    s_prof_game = pthread_self();
+    mkdir(DATA_DIR "/logs", 0777);
+    if (pthread_create(&t, NULL, prof_sampler, NULL) == 0)
+        fprintf(stderr, "[PROF] muestreando game_main -> %s\n", DATA_DIR "/logs/prof_game_main.txt");
+}
+/* compat/posix_vita.c (pthread_setname_np): el nombre solo sirve para [THR] en la Vita. */
+void vita_thread_set_name(const char *name) { (void)name; }

@@ -6,9 +6,10 @@
 #
 #   port/vita/hosttest/run.sh build          compila (contenedor arm64 + cross gcc, ~15 min)
 #   port/vita/hosttest/run.sh run [segundos] arranca el juego (por defecto 600 s)
+#   port/vita/hosttest/run.sh prof [top]     informe del perfil (tras run con HOSTTEST_PROF=1)
 #
 # Logs, capturas (logs/frames/*.ppm) y saves: build/hosttest-data/.
-# Variables útiles en run: HOSTTEST_PAD, HOSTTEST_FRAME_MS (ver psp2_fake.c), RECOMP_*,
+# Variables útiles en run: HOSTTEST_PAD, HOSTTEST_FRAME_MS, HOSTTEST_PROF=1 (perfil de game_main) (ver psp2_fake.c), RECOMP_*,
 # HOSTTEST_WINDOW=1 (ventana en vivo por XQuartz, teclado en window_sdl.c).
 set -eu
 PORT=$(cd "$(dirname "$0")/../../.." && pwd)
@@ -48,13 +49,21 @@ run)
   if [ -n "${HOSTTEST_WINDOW:-}" ]; then WINDOW="-e DISPLAY=host.docker.internal:0"; fi
   docker run --rm --platform linux/arm/v7 \
     -v "$VOLUME":/build:ro -v "$GAME":/game:ro -v "$DATA":/data \
-    -e HOSTTEST_PAD -e HOSTTEST_FRAME_MS -e RECOMP_APU_TRACE -e RECOMP_TRAP_NULL -e RECOMP_HW \
+    -e HOSTTEST_PAD -e HOSTTEST_FRAME_MS -e HOSTTEST_PROF -e HOSTTEST_PROF_US -e RESOT_DIRECT_DRAW -e RECOMP_APU_TRACE -e RECOMP_TRAP_NULL -e RECOMP_HW \
     -e RECOMP_VITA_RT_FLIP -e EGL_PLATFORM=surfaceless -e LIBGL_ALWAYS_SOFTWARE=1 $WINDOW \
     "$RUNIMAGE" sh -c '
       for f in /game/*; do ln -sfn "$f" /data/; done
       cd /data && timeout '"${2:-600}"' /build/out/pop-sot; echo "salida: $?"'
   echo "logs: $DATA/logs"
   ;;
+prof)
+  # Símbolos del mismo binario que corrió; el informe se genera en el host.
+  docker run --rm -v "$VOLUME":/build:ro "$IMAGE" \
+    arm-linux-gnueabihf-nm -n -S --defined-only /build/out/pop-sot > "$DATA/logs/pop-sot.nm"
+  python3 -I "$PORT/port/vita/hosttest/prof_report.py" "$DATA/logs/prof_game_main.txt" \
+    "$DATA/logs/pop-sot.nm" "$PORT/upstream/rePOP/source/xbox-retail/gen" ${2:-60} \
+    | tee "$DATA/logs/prof_report.md"
+  ;;
 *)
-  sed -n 2,12p "$0"; exit 2 ;;
+  sed -n 2,13p "$0"; exit 2 ;;
 esac

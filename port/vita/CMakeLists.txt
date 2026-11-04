@@ -60,7 +60,7 @@ set(VITAIZED
   kernel/nv2a_pb_exec.c kernel/nv2a_vsh_interp.h kernel/nv2a_vsh_interp.c
   nv2a/qemu_shim.h apu/apu_shim.h apu/apu_state.h
   apu/apu_core.c apu/apu_vp.c apu/apu_dsp.c apu/apu_mmio_hook.c
-  port/game/recomp_manual.c port/game/guest_probe.h source/${TARGET_ID}/target_hooks.c
+  port/game/recomp_manual.c port/game/guest_probe.h port/game/resot_cheats.h port/game/resot_menu_pointer.c source/${TARGET_ID}/target_hooks.c
   platform/win32_compat.c kernel/guest_vmem.c port/windows/src/scene.c kernel/nv2a_hw_d3d11.inc
   kernel/kernel_path.c
   ${DSOUND_GEN})
@@ -105,9 +105,11 @@ set(HOST_SOURCES
   ${REPOP}/port/android/src/host_files.c
   ${REPOP}/port/android/src/sha256.c
   ${VZ}/rt/scene.c
-  ${VZ}/rt/recomp_manual.c)
+  ${VZ}/rt/recomp_manual.c
+  ${VZ}/rt/resot_menu_pointer.c)
 
 file(GLOB_RECURSE GEN_SOURCES CONFIGURE_DEPENDS "${TGT}/gen/*.c")
+list(FILTER GEN_SOURCES EXCLUDE REGEX "/\\._[^/]*$") # AppleDouble de macOS en discos externos
 if(NOT GEN_SOURCES)
   message(FATAL_ERROR "Sin C generado en ${TGT}/gen (git submodule update --init)")
 endif()
@@ -150,6 +152,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
   "${RT}" "${RT}/kernel" "${RT}/platform" "${RT}/apu" "${RT}/nv2a" "${RT}/usb"
   "${RT}/input" "${RT}/audio" "${RT}/video" "${RT}/d3d"
   "${REPOP}/port/third_party/xboxrecomp/include/xbox"
+  "${REPOP}/port/game"
   "${REPOP}/port/android/src" "${REPOP}/port/windows/src")
 # El código x86 elevado y el runtime asumen la aritmética de x86 (ver Android).
 target_compile_options(${PROJECT_NAME} PRIVATE
@@ -163,7 +166,8 @@ if(HOSTTEST)
   # Solo los headers psp2 de VitaSDK (no su newlib): copiados por hosttest/run.sh.
   target_sources(${PROJECT_NAME} PRIVATE hosttest/psp2_fake.c hosttest/window_sdl.c)
   target_include_directories(${PROJECT_NAME} PRIVATE "${PSP2_INCLUDE}")
-  target_compile_options(${PROJECT_NAME} PRIVATE -mthumb -mfpu=neon)   # como la Vita (Cortex-A9)
+  # gcc 14 de Debian: long* frente a LONG* (nv2a_direct.inc) es error; en ARM32 miden igual y gcc 10 de VitaSDK solo avisa
+  target_compile_options(${PROJECT_NAME} PRIVATE -mthumb -mfpu=neon -Wno-error=incompatible-pointer-types)   # como la Vita (Cortex-A9)
   # Arena grande para medir el pico de EXT_VMA que la Vita debe cubrir (vvm.c).
   set_property(SOURCE compat/vvm.c APPEND PROPERTY COMPILE_DEFINITIONS VVM_EXT_ARENA_MB=160)
   # GL de Mesa (llvmpipe) en lugar de vitaGL; shaders en GLSL (nv2a_hw_vita.inc)
@@ -184,7 +188,7 @@ include(ExternalProject)
 ExternalProject_Add(vitaGL_vendored
   SOURCE_DIR "${VITAGL_DIR}" BUILD_IN_SOURCE 1
   CONFIGURE_COMMAND "" INSTALL_COMMAND ""
-  BUILD_COMMAND make SOFTFP_ABI=1 NO_DEBUG=1 HAVE_SHADER_CACHE=1 NO_SPLASHSCREEN=1 LOG_ERRORS=1 DRAW_SPEEDHACK=2
+  BUILD_COMMAND make SOFTFP_ABI=1 NO_DEBUG=1 HAVE_SHADER_CACHE=1 NO_SPLASHSCREEN=1 LOG_ERRORS=1
   BUILD_BYPRODUCTS "${VITAGL_DIR}/libvitaGL.a")
 add_library(vitaGL_lib STATIC IMPORTED)
 set_target_properties(vitaGL_lib PROPERTIES IMPORTED_LOCATION "${VITAGL_DIR}/libvitaGL.a")
@@ -198,12 +202,12 @@ if(NOT EXISTS "${FFMPEG_BINK}/lib/libavcodec.a")
 endif()
 set_property(SOURCE src/movie_vita.c APPEND PROPERTY INCLUDE_DIRECTORIES "${FFMPEG_BINK}/include")
 target_link_libraries(${PROJECT_NAME} "${FFMPEG_BINK}/lib/libavformat.a" "${FFMPEG_BINK}/lib/libavcodec.a" "${FFMPEG_BINK}/lib/libavutil.a" z)
-target_sources(${PROJECT_NAME} PRIVATE compat/threads_vita.c compat/log_vita.c src/movie_vita.c)   # solo Vita: [THR], afinidad, log x32, vídeos Bink por FFmpeg
+target_sources(${PROJECT_NAME} PRIVATE compat/threads_vita.c compat/log_vita.c compat/lang_vita.c src/movie_vita.c)   # solo Vita: [THR], afinidad, log x32, vídeos Bink por FFmpeg
 target_link_libraries(${PROJECT_NAME}
   -Wl,--whole-archive pthread -Wl,--no-whole-archive
   -Wl,--pic-veneer -Wl,--wrap=recomp_lookup -Wl,--wrap=pthread_create -Wl,--wrap=CreateThread
   -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=memalign
-  -Wl,--wrap=__emutls_get_address
+  -Wl,--wrap=__emutls_get_address -Wl,--wrap=resot_game_language
   SceDisplay_stub SceSysmem_stub ScePower_stub
   vitaGL_lib vitashark SceShaccCgExt taihen_stub SceShaccCg_stub mathneon
   SceKernelThreadMgr_stub SceIofilemgr_stub SceRtc_stub SceAppUtil_stub SceTouch_stub SceAudio_stub SceAppMgr_stub SceCtrl_stub

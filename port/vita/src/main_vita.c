@@ -39,7 +39,8 @@
  * compat/vvm.c aparte con sceKernelAllocMemBlock, ya con el log abierto: con
  * 256 MB aquí la Vita no tenía memoria y newlib fallaba antes de main, sin log
  * (primer .psp2dmp en consola, 2026-10-20: LR en _init_vita_heap). */
-int _newlib_heap_size_user = 56 * 1024 * 1024;
+/* 40 MB: pico medido 29,4 MB (log_022); los 16 MB liberados pagan la ventana contigua en RAM. */
+int _newlib_heap_size_user = 40 * 1024 * 1024;
 /* pthread_create sin atributos: 32 KB en VitaSDK (1 MB en Android). Los hilos
  * de temporizador del runtime ejecutan código del juego (DPC/APC). */
 unsigned int _pthread_stack_default_user = 1024 * 1024;
@@ -182,9 +183,16 @@ static void load_env_file(void)
 
 static void *game_main(void *unused)
 {
-    /* Sin afinidad fija (plan, fase 7, retirada): la Vita no reparte tiempo entre hilos de igual
-     * prioridad en un núcleo; con el ejecutor fijo en el núcleo 1 junto a kernel_timer_thread se
-     * quedó READY sin CPU para siempre (log_019: arranque congelado tras vglInitExtended). */
+#ifdef __vita__
+    /* Fase 5: Afinidad dedicada al juego guest x86 en Núcleo 2 (0x40000).
+     * El ejecutor GPU corre en Núcleo 1 y timers/audio en Núcleo 0, garantizando
+     * que la simulación del juego y el render no se ahoguen mutuamente. */
+    extern void vita_thread_set_affinity(const char *name, int mask);
+    vita_thread_set_affinity("game_main", 0x40000);
+#else
+    extern void hosttest_prof_register(void);   /* hosttest/psp2_fake.c, HOSTTEST_PROF=1 */
+    hosttest_prof_register();
+#endif
     void *xbe_data = NULL;
     size_t xbe_size = 0;
     char why[512];
@@ -258,6 +266,8 @@ int main(void)
     sceIoMkdir(DATA_DIR "/saves", 0777);
     open_log();
 #ifdef __vita__
+    extern void vita_thread_set_affinity(const char *name, int mask);
+    vita_thread_set_affinity("main", 0x10000); /* Núcleo 0 */
     vita_thread_register((void *)main);
     vita_tls_register_main();
 #endif
@@ -284,6 +294,11 @@ int main(void)
     if (!strcmp(getenv("RECOMP_HW"), "0"))
         unsetenv("RECOMP_HW");   /* upstream solo mira si existe: "0" = rasterizador por software */
     set_default("RECOMP_HW_SCALE", "1");   /* 640x480 nativos: x2 no cabe en la GPU de la Vita */
+    set_default("RECOMP_XC_LANGUAGE", "5");   /* español (compat/lang_vita.c) */
+    /* rePOP 0.5.0: con el renderer directo el juego se para tras el primer flip, antes de
+     * ubisoft.int (log_042 en consola y hosttest; con 0 arranca). Apagado hasta arreglarlo. */
+    set_default("RESOT_DIRECT_DRAW", "0");
+    set_default("RECOMP_RENDER_PERCENT", "75"); /* Render scale 75% (480x360) para optimizar fillrate en Vita */
     /* Rasterizador por software (sin RECOMP_HW): upstream usa núcleos-4 hilos
      * (en Vita, 1). ponytail: 3 = principal + 2 trabajadores, sin medir en consola. */
     set_default("RECOMP_RASTER_THREADS", "3");

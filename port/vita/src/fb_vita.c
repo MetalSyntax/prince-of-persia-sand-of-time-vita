@@ -306,5 +306,13 @@ void xbox_FramebufferWindowHwMode(int on) { s_hw_mode = on; }
 void xbox_FramebufferHostKey(int vk, int down) { (void)vk; (void)down; }
 void xbox_FramebufferHostMouse(int dx, int dy) { (void)dx; (void)dy; }
 void xbox_FramebufferToggleDebugPanel(void) {}
+/* rePOP 0.5.0: vistas de depuración F8 (modo 0 = normal) y diagnósticos de PC/Android, sin uso en la Vita */
+int  xbox_FramebufferRenderMode(void) { return 0; }
+void xbox_FramebufferSetDebugSegments(const void *segments, uint32_t count) { (void)segments; (void)count; }
+void nv2a_gate_probe_range(uint32_t index, uint32_t data, uint32_t stride) { (void)index; (void)data; (void)stride; }
+void nv2a_gate_probe_report(void) {}
+void resot_android_gpu_turbo_option(int enabled) { (void)enabled; }
+/* nv2a_hw_vita.inc responde cada informe de visibilidad al recibirlo: no queda nada pendiente */
+void nv2a_hw_native_visibility_kick(void) {}
 void resot_host_draw_text(uint32_t *bits, int w, int h, int x, int y, const char *text, uint32_t argb)
 { (void)bits; (void)w; (void)h; (void)x; (void)y; (void)text; (void)argb; }

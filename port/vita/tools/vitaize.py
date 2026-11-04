@@ -110,6 +110,9 @@ ANCHORS = {
          "#define NV2A_VSH_GPU_INPUTS 16"),
     ],
     "xbox_memory_layout.c": [
+        ("static DWORD WINAPI nv2a_ack_thread(LPVOID param)\n{\n",
+         "static DWORD WINAPI nv2a_ack_thread(LPVOID param)\n{\n"
+         "#ifdef __vita__\n    { extern void vita_thread_set_affinity(const char *, int); vita_thread_set_affinity(\"nv2a_ack\", 0x20000); }\n#endif\n"),
         # La página de kernel falsa vive en la ventana contigua (memoria aparte en Vita).
         ("            ? (void *)kernel_native\n",
          "            ? (void *)vvm_ptr((uint32_t)kernel_native)\n"),
@@ -123,6 +126,9 @@ ANCHORS = {
     "target_hooks.c": [
         # Que use la copia traducida de guest_probe.h (misma carpeta rt/).
         ('#include "../../port/game/guest_probe.h"', '#include "guest_probe.h"'),
+        # rePOP v0.4.1: resot_cheats.h escribe en memoria guest con H + va crudo; su copia
+        # traducida (consola 2026-10-30: data abort en sub_00417F85 con un va basura).
+        ('#include "../../port/game/resot_cheats.h"', '#include "resot_cheats.h"'),
         # Vídeos como MP4 con SceAvPlayer (src/movie_vita.c): la rutina de estado de
         # Bink no decodifica mientras suena el MP4 (1 = sigue, 0 = EOF, -1 = Bink).
         ('        fprintf(stderr, "[VIDEO] skipped movie (Space / A)\\n");\n',
@@ -153,7 +159,10 @@ ANCHORS = {
     # La APU recupera hasta 16 bloques como en la demo: en la Vita cond_timedwait
     # despierta 10-20 ms tarde, con 1 bloque se perdía ~45 % del audio (cortes).
     "apu_core.c": [
-        ("#if RESOT_RUNTIME_DEMO\n#define APU_CATCH_UP_US (16 * EP_FRAME_US)\n",
+        ("static void *mcpx_apu_frame_thread(void *arg)\n{\n",
+         "static void *mcpx_apu_frame_thread(void *arg)\n{\n"
+         "#ifdef __vita__\n    { extern void vita_thread_set_affinity(const char *, int); vita_thread_set_affinity(\"apu_frame\", 0x10000); }\n#endif\n"),
+        ("#if RESOT_RUNTIME_DEMO || (defined(__ANDROID__) && RESOT_RUNTIME_RETAIL)\n#define APU_CATCH_UP_US (16 * EP_FRAME_US)\n",
          "#if 1 /* reSOT Vita */\n#define APU_CATCH_UP_US (16 * EP_FRAME_US)\n"),
     ],
     # Encoder GPU de la Vita (src/nv2a_hw_vita.inc) en lugar del de Android
@@ -165,8 +174,8 @@ ANCHORS = {
     ],
     # Stats del flip sin s_hw (build sin backend GPU) y el hilo GL de hosttest.
     "nv2a_pb_exec.c": [
-        ('/* RE-SoT: the Direct3D 11 rasteriser, which reads the state above. */\n#include "nv2a_hw_d3d11.inc"\n',
-         '/* RE-SoT: the Direct3D 11 rasteriser, which reads the state above. */\n'
+        ('static uint64_t s_draw_path[2][3];\n#include "nv2a_hw_d3d11.inc"\n',
+         'static uint64_t s_draw_path[2][3];\n'
          '#include "nv2a_vita_glthread.h"\n#include "nv2a_hw_d3d11.inc"\n'),
         ("xbox_FramebufferWindowFrameStats((uint32_t)(s_hw.draws - draws_at_flip));\n"
          "            draws_at_flip = s_hw.draws;\n",
@@ -216,59 +225,17 @@ ANCHORS = {
          "        { extern void vita_movie_note_path(const char *); vita_movie_note_path(xbox_path); }\n#endif\n"),
     ],
     "kernel_bridge.c": [
+        ("static DWORD WINAPI kernel_timer_thread(LPVOID unused)\n{\n",
+         "static DWORD WINAPI kernel_timer_thread(LPVOID unused)\n{\n"
+         "#ifdef __vita__\n    { extern void vita_thread_set_affinity(const char *, int); vita_thread_set_affinity(\"kernel_timer\", 0x10000); }\n#endif\n"),
         ("        if (h && h != INVALID_HANDLE_VALUE)\n            GetFileSizeEx(h, &size);\n"
          "        BRIDGE_MEM32(out_va +  0) = 0;                       /* StartingOffset */\n",
          "        if (h && h != INVALID_HANDLE_VALUE)\n            GetFileSizeEx(h, &size);\n"
          "        { extern void vita_partition_length(HANDLE, LARGE_INTEGER *); vita_partition_length(h, &size); }\n"
          "        BRIDGE_MEM32(out_va +  0) = 0;                       /* StartingOffset */\n"),
-        # reSOT Vita: evitar saturar CPU 0 con 1000 ciclos/s y 32k bloqueos de sección crítica
-        ("        Sleep(1);              /* RE-SoT: was 10; the vblank clock needs 1 ms */\n"
-         "        kernel_vblank_tick();  /* the GPU's frame clock */\n"
-         "        /* RE-SoT: DPCs and timer DPCs wait while the title is at raised IRQL. */\n"
-         "        disp = kernel_dispatch_enter();\n"
-         "        if (disp)\n"
-         "            kernel_drain_dpcs();   /* deferred work, before due timers */\n"
-         "        now = (long long)GetTickCount64();\n\n"
-         "        for (i = 0; i < XBOX_MAX_TIMERS; i++) {\n"
-         "            uint32_t dpc, fired_va;\n\n"
-         "            EnterCriticalSection(&g_timer_lock);\n"
-         "            if (!g_timers[i].timer_va || now < g_timers[i].due_ms\n"
-         "                || (!disp && g_timers[i].dpc_va)) {\n"
-         "                LeaveCriticalSection(&g_timer_lock);\n"
-         "                continue;\n"
-         "            }\n"
-         "            fired_va = g_timers[i].timer_va;\n"
-         "            dpc = g_timers[i].dpc_va;\n"
-         "            if (g_timers[i].period_ms > 0)\n"
-         "                g_timers[i].due_ms = now + g_timers[i].period_ms;\n"
-         "            else\n"
-         "                g_timers[i].timer_va = 0;      /* one-shot, done */\n"
-         "            LeaveCriticalSection(&g_timer_lock);",
-         "        Sleep(3);              /* reSOT Vita: 3 ms en lugar de 1 ms evita saturar CPU */\n"
-         "        kernel_vblank_tick();  /* the GPU's frame clock */\n"
-         "        /* RE-SoT: DPCs and timer DPCs wait while the title is at raised IRQL. */\n"
-         "        disp = kernel_dispatch_enter();\n"
-         "        if (disp)\n"
-         "            kernel_drain_dpcs();   /* deferred work, before due timers */\n"
-         "        now = (long long)GetTickCount64();\n\n"
-         "        for (i = 0; i < XBOX_MAX_TIMERS; i++) {\n"
-         "            uint32_t dpc = 0, fired_va = 0;\n\n"
-         "            if (!g_timers[i].timer_va || now < g_timers[i].due_ms\n"
-         "                || (!disp && g_timers[i].dpc_va))\n"
-         "                continue;\n\n"
-         "            EnterCriticalSection(&g_timer_lock);\n"
-         "            if (g_timers[i].timer_va && now >= g_timers[i].due_ms\n"
-         "                && (disp || !g_timers[i].dpc_va)) {\n"
-         "                fired_va = g_timers[i].timer_va;\n"
-         "                dpc = g_timers[i].dpc_va;\n"
-         "                if (g_timers[i].period_ms > 0)\n"
-         "                    g_timers[i].due_ms = now + g_timers[i].period_ms;\n"
-         "                else\n"
-         "                    g_timers[i].timer_va = 0;\n"
-         "            }\n"
-         "            LeaveCriticalSection(&g_timer_lock);\n"
-         "            if (!fired_va)\n"
-         "                continue;"),
+        # reSOT Vita: evitar saturar CPU 0 con 1000 ciclos/s
+        ("        Sleep(1);              /* RE-SoT: was 10; the vblank clock needs 1 ms */\n",
+         "        Sleep(3);              /* reSOT Vita: 3 ms en lugar de 1 ms evita saturar CPU */\n"),
     ],
     "kernel_rtl.c": [
         # reSOT Vita: caché TLS para xbox_cs_shadow evitando contención de SRWLock en 1.6M de llamadas
@@ -409,7 +376,7 @@ def patch_recomp_types(src, dst):
     if old not in text:
         sys.exit("vitaize: ancla XBOX_PTR no encontrada en %s" % src)
     text = text.replace(old, "#include \"vvm.h\"\n"
-                        "#define XBOX_PTR(addr) ((uintptr_t)vvm_ptr((uint32_t)(addr) + (uint32_t)g_xbox_mem_offset))")
+                        "#define XBOX_PTR(addr) vvm_gen_ptr((uint32_t)(addr))")   # compat/vvm.h
     # x86 lee float/double/int64 en cualquier dirección; en ARM vldr/vstr/ldrd exigen
     # alineación y dan data abort (consola, 2026-10-21: float en el VA 0x004782DD,
     # sub_000613F0). Con alineación 1 GCC emite ldr/str + vmov, válidos en ARMv7.

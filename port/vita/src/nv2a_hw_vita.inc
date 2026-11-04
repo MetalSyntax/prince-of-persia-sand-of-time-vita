@@ -100,10 +100,12 @@ static struct {
     GLint blit_tex, fill_col;
     uint32_t overlay_w, overlay_h, overlay_serial;
     int applied_percent;
+    int sc_on; GLint sc[4];   /* último scissor enviado a vitaGL (vg_scissor_gl); sc_on -1 = desconocido */
     /* visibilidad: área dibujada (píxeles guest) mientras está activa */
     int vis_enabled;
     double vis_pixels;
 } s_vg;
+static void vg_scissor_gl(int on, GLint x, GLint y, GLint w, GLint h);
 
 static int ng_active(void) { return s_vg.active; }
 
@@ -475,8 +477,13 @@ static void vg_quad(float x, float y, float w, float h, float fbw, float fbh)
 {
     float x0 = 2.0f * x / fbw - 1.0f, x1 = 2.0f * (x + w) / fbw - 1.0f;
     float y0 = 1.0f - 2.0f * y / fbh, y1 = 1.0f - 2.0f * (y + h) / fbh;   /* pantalla: NDC +1 arriba */
-    float q[6][4] = {{x0, y0, 0, 0}, {x1, y0, 1, 0}, {x0, y1, 0, 1},
-                     {x1, y0, 1, 0}, {x1, y1, 1, 1}, {x0, y1, 0, 1}};
+    static float q[6][4];
+    q[0][0] = x0; q[0][1] = y0; q[0][2] = 0; q[0][3] = 0;
+    q[1][0] = x1; q[1][1] = y0; q[1][2] = 1; q[1][3] = 0;
+    q[2][0] = x0; q[2][1] = y1; q[2][2] = 0; q[2][3] = 1;
+    q[3][0] = x1; q[3][1] = y0; q[3][2] = 1; q[3][3] = 0;
+    q[4][0] = x1; q[4][1] = y1; q[4][2] = 1; q[4][3] = 1;
+    q[5][0] = x0; q[5][1] = y1; q[5][2] = 0; q[5][3] = 1;
     int i;
     for (i = 1; i < 16; i++) glDisableVertexAttribArray((GLuint)i);
     glEnableVertexAttribArray(0);
@@ -497,7 +504,11 @@ static void vg_blit(GLuint tex, float x, float y, float w, float h, float fbw, f
 /* Perfil por fotograma (línea "[HW vita] ... fps"): µs en cada parte del backend. Lo que
  * el ejecutor tarda de más ("[KICK] ... executing") es CPU de upstream: lectura de
  * vértices e intérprete de vertex shaders (cpu_vsh). */
-static struct { uint64_t compose, present, verts, pverts, depths, rej_pack, rej_inputs, rej_vsp; } s_prof;
+static struct {
+    uint64_t compose, present, verts, pverts, depths;
+    uint64_t batch, tex;   /* µs en ng_draw_program_batch y, dentro, en vg_texture (PERF_PLAN.md) */
+    uint64_t rej_pack, rej_inputs, rej_vsp, rej_maxverts, rej_novsh;
+} s_prof;
 #if defined(RESOT_HW_GLSL)
 #include <time.h>
 static uint64_t vg_now_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u; }
@@ -507,6 +518,12 @@ static uint64_t vg_now_us(void) { return sceKernelGetProcessTimeWide(); }
 #endif
 
 /* ── init ────────────────────────────────────────────────── */
+
+/* Hilo de GL: ¿hace al menos ms milisegundos del último flip del juego? */
+int vita_gl_flip_idle(unsigned ms)
+{
+    return s_vg.active && GetTickCount() - s_hw.last_flip_ms >= ms;
+}
 
 #if !defined(RESOT_HW_GLSL)
 int vita_movie_active(void);
@@ -521,12 +538,6 @@ void vita_gl_movie_present(void)
     EnterCriticalSection(&s_hw.lock);
     if (!s_hw.pending_present) { ng_compose(); ng_present(0); }
     LeaveCriticalSection(&s_hw.lock);
-}
-
-/* Hilo de GL: ¿hace al menos ms milisegundos del último flip del juego? */
-int vita_gl_flip_idle(unsigned ms)
-{
-    return s_vg.active && GetTickCount() - s_hw.last_flip_ms >= ms;
 }
 
 /* Errores internos de vitaGL/GXM al log del port (vendor/vitaGL: LOG_ERRORS y gxm.c). */
@@ -548,7 +559,7 @@ void vgl_gxm_error_hook(const char *what, int code)
 }
 #endif
 
-#define VG_MAX_BATCH_VERTS 8192
+#define VG_MAX_BATCH_VERTS 32768
 static float *s_vg_scratch_verts;
 static uint16_t *s_vg_scratch_idx;
 
@@ -569,13 +580,17 @@ static int ng_init(const char *backend)
         void *base = NULL;
         size_t sz = (sizeof(HwVertex) * VG_MAX_BATCH_VERTS + 0xFFFu) & ~0xFFFu;
         SceUID blk = sceKernelAllocMemBlock("pop-hw-verts", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, sz, NULL);
-        s_hw.verts = blk >= 0 && sceKernelGetMemBlockBase(blk, &base) >= 0 ? (HwVertex *)base : NULL;
+        if (blk >= 0 && sceKernelGetMemBlockBase(blk, &base) >= 0) {
+            sceGxmMapMemory(base, sz, SCE_GXM_MEMORY_ATTRIB_READ | SCE_GXM_MEMORY_ATTRIB_WRITE);
+            s_hw.verts = (HwVertex *)base;
+        }
     }
     {
         void *base = NULL;
         size_t sz = (sizeof(float) * 4 * 16 * VG_MAX_BATCH_VERTS + (size_t)VG_MAX_BATCH_VERTS * 6 * sizeof(uint16_t) + 0xFFFu) & ~0xFFFu;
         SceUID blk = sceKernelAllocMemBlock("pop-batch-scratch", SCE_KERNEL_MEMBLOCK_TYPE_USER_RW, sz, NULL);
         if (blk >= 0 && sceKernelGetMemBlockBase(blk, &base) >= 0) {
+            sceGxmMapMemory(base, sz, SCE_GXM_MEMORY_ATTRIB_READ | SCE_GXM_MEMORY_ATTRIB_WRITE);
             s_vg_scratch_verts = (float *)base;
             s_vg_scratch_idx = (uint16_t *)((uint8_t *)base + sizeof(float) * 4 * 16 * VG_MAX_BATCH_VERTS);
         }
@@ -600,8 +615,8 @@ static int ng_init(const char *backend)
      * sobrepasos (log_067: pico medido 5.6 MB por frame con geometría e índices del menú). */
     vglSetCircularPoolSize(20 * 1024 * 1024);
 #endif
-    fprintf(stderr, "[HW vita] vglInitExtended (deja 16 MB de RAM al runtime)\n");
-    if (!vglInitExtended(0, VG_SCREEN_W, VG_SCREEN_H, 16 * 1024 * 1024, VG_MSAA_NONE)) {
+    fprintf(stderr, "[HW vita] vglInitExtended (deja 14 MB de RAM al runtime)\n");
+    if (!vglInitExtended(0, VG_SCREEN_W, VG_SCREEN_H, 14 * 1024 * 1024, VG_MSAA_NONE)) {
         fprintf(stderr, "[HW vita] vglInitExtended falló: rasterizador por software\n");
         return 0;
     }
@@ -619,6 +634,9 @@ static int ng_init(const char *backend)
             if (pct == 50 || pct == 75 || pct == 100) {
                 xbox_SetRenderScalePercent(pct);
                 fprintf(stderr, "[HW vita] escalado de render inicial: %d%%\n", pct);
+                if (pct == 100) {
+                    fprintf(stderr, "[HW vita] AVISO: 100%% en env.txt satura el fillrate de la GPU en PS Vita (se recomienda 75%% o 50%%)\n");
+                }
             }
         }
     }
@@ -699,7 +717,7 @@ static VgSurface *ng_surface(void)
     glBindFramebuffer(GL_FRAMEBUFFER, out->fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, out->tex, 0);
     vg_bind_surface(out);   /* sincroniza la caché de vg_bind_surface */
-    glDisable(GL_SCISSOR_TEST);
+    vg_scissor_gl(0, 0, 0, 0, 0);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -716,6 +734,17 @@ static void ng_mark(VgSurface *s)
 {
     s->frame = s_hw.frame;
     if (!s_vg.largest || s->w * s->h >= s_vg.largest->w * s_vg.largest->h) s_vg.largest = s;
+}
+
+/* Distinguir efectos render-to-texture de texturas UI estáticas (ng_effect_source). */
+static int ng_effect_source(uint32_t offset, uint32_t w, uint32_t h)
+{
+    uint32_t i;
+    for (i = 0; i < HW_MAX_SURFACES; i++) {
+        const VgSurface *s = &s_vg.surfaces[i];
+        if (s->fbo && s->offset == offset && s->w == w && s->h == h) return 1;
+    }
+    return 0;
 }
 
 /* El origen 160x120 de la cadena de glow dibujado este frame (hw_postprocess_candidate). */
@@ -765,10 +794,11 @@ static GLuint vg_depth(VgSurface *s)
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rb);
         if (rb && s->depth == 0) {   /* depth nuevo para esta superficie: limpio */
-            glDisable(GL_SCISSOR_TEST);
+            vg_scissor_gl(0, 0, 0, 0, 0);
             glDepthMask(GL_TRUE);
             glClearDepthf(1.0f);
             glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+            s_vg.sc_on = -1;   /* el stencil borrado lleva la máscara del scissor de vitaGL */
         }
         s->depth = rb;
     }
@@ -794,7 +824,7 @@ static void vg_sampler(VgTexture *c, const Texture *t, GLenum target)
 static uint32_t vg_tex_hash(const Texture *t)
 {
     uint32_t bytes = t->cube ? 6 * tex_face_stride(t) : hw_tex_bytes(t);
-    uint32_t n = bytes / 4, step = n > 2048 ? n / 2048 : 1, i;
+    uint32_t n = bytes / 4, step = n > 128 ? n / 128 : 1, i;
     uint32_t h = 2166136261u;
     uint32_t mem_off = (uint32_t)(uintptr_t)xbox_GetMemoryOffset();
     for (i = 0; i < n; i += step) {
@@ -803,7 +833,7 @@ static uint32_t vg_tex_hash(const Texture *t)
         h = (h ^ *p) * 16777619u;
     }
     if (t->palette) {
-        for (i = 0; i < 256; i += 8) {
+        for (i = 0; i < 256; i += 16) {
             uint32_t va = t->palette + i * 4;
             const uint32_t *p = (const uint32_t *)vvm_ptr(va + mem_off);
             h = (h ^ *p) * 16777619u;
@@ -814,7 +844,16 @@ static uint32_t vg_tex_hash(const Texture *t)
 
 /* La textura de la etapa: un render target por offset, o la decodificada de
  * memoria guest (sample_tex, como el rasterizador por software) en caché. */
+static GLuint vg_texture_body(int stage, VgSurface *target);
 static GLuint vg_texture(int stage, VgSurface *target)
+{
+    uint64_t t0 = vg_now_us();
+    GLuint r = vg_texture_body(stage, target);
+    s_prof.tex += vg_now_us() - t0;
+    return r;
+}
+
+static GLuint vg_texture_body(int stage, VgSurface *target)
 {
     const Texture *t = &s_gpu.texs[stage];
     VgSurface *best = NULL;
@@ -854,16 +893,23 @@ static GLuint vg_texture(int stage, VgSurface *target)
     /* Misma textura (dirección, tamaño, formato) con contenido nuevo: se actualiza en su sitio.
      * Re-crearla con glTexImage2D reserva memoria nueva en cada cambio y vitaGL solo libera la
      * vieja al presentar (log_013: 1200 KB por fotograma hasta agotar la VRAM). */
-    int inplace = c != NULL && !t->cube && c->levels == 1;
-    if (!c) c = victim;
+    int inplace = c != NULL && !t->cube;
+    if (!c) {
+        c = victim;
+        if (c->tex) {
+            /* Desalojo de textura vieja con distinto tamaño/formato: liberar en vitaGL para evitar OOM de VRAM */
+            if (c->guest.width != t->width || c->guest.height != t->height || c->guest.cube != t->cube) {
+                glDeleteTextures(1, &c->tex);
+                c->tex = 0;
+            }
+        }
+    }
     if (!c->tex) glGenTextures(1, &c->tex);
-    else if (c->guest.cube != t->cube) { glDeleteTextures(1, &c->tex); glGenTextures(1, &c->tex); }
     c->wrap_s = c->wrap_t = c->min = c->mag = -1;
     layers = t->cube ? 6 : 1;
-    if (t->levels > 1 && tex_size_from_format(t->color)) {
-        uint32_t extent = t->width > t->height ? t->width : t->height;
-        while ((extent >>= 1) != 0) levels++;
-    }
+    /* En pantalla de 544p de PS Vita forzamos levels = 1: evita generación por software de mipmaps
+     * en CPU y ahorra un 33% de VRAM evitando OOM */
+    levels = 1;
 #if !defined(RESOT_HW_GLSL)
     /* DXT1 tal cual (como THUG-Vita): 8 veces menos memoria que RGBA y sin decodificar en la
      * CPU. vitaGL lo pasa por el pool circular con sceGxmTransferCopy, que falla en silencio
@@ -913,7 +959,7 @@ static GLuint vg_texture(int stage, VgSurface *target)
                     d[k] = (uint16_t)(((v & 0xF8) << 8) | ((v >> 5) & 0x07E0) | ((v >> 19) & 0x1F));
                 }
             }
-            if (inplace && c->fmt == fmt && c->guest.width == t->width && c->guest.height == t->height && levels == 1)
+            if (inplace && c->fmt == fmt && c->guest.width == t->width && c->guest.height == t->height)
                 glTexSubImage2D(target, 0, 0, 0, (GLsizei)t->width, (GLsizei)t->height,
                                 fmt ? GL_RGB : GL_RGBA, fmt ? GL_UNSIGNED_SHORT_5_6_5 : GL_UNSIGNED_BYTE, px);
             else
@@ -923,8 +969,7 @@ static GLuint vg_texture(int stage, VgSurface *target)
         }
     }
     free(px);
-    if (levels > 1) glGenerateMipmap(gtarget);
-    c->guest = *t; c->hash = hash; c->levels = levels; c->checked = c->used = s_hw.frame;
+    c->guest = *t; c->hash = hash; c->levels = 1; c->checked = c->used = s_hw.frame;
     s_hw.tex_uploads++;
 bind:
     glBindTexture(gtarget, c->tex);
@@ -947,6 +992,22 @@ static GLenum vg_factor(uint32_t f)
     }
 }
 
+/* vitaGL marca el scissor sucio en cada glScissor/glEnable aunque no cambie, y el siguiente draw
+ * repinta su máscara de stencil con 1-2 quads a pantalla completa (update_scissor_test, tests.c):
+ * dos dibujos extra por cada draw del juego (log_038: 152 draws, 44,5 ms). Solo se llama si cambia. */
+static void vg_scissor_gl(int on, GLint x, GLint y, GLint w, GLint h)
+{
+    if (s_vg.sc_on == on && (!on || (s_vg.sc[0] == x && s_vg.sc[1] == y && s_vg.sc[2] == w && s_vg.sc[3] == h)))
+        return;
+    if (!on) glDisable(GL_SCISSOR_TEST);
+    else {
+        if (s_vg.sc_on != 1) glEnable(GL_SCISSOR_TEST);
+        glScissor(x, y, w, h);
+        s_vg.sc[0] = x; s_vg.sc[1] = y; s_vg.sc[2] = w; s_vg.sc[3] = h;
+    }
+    s_vg.sc_on = on;
+}
+
 static void vg_scissor(VgSurface *s, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
 {
     GLint sx = (GLint)hw_px(x0, s->sc), sw = (GLint)hw_px(x1, s->sc) - sx;
@@ -954,9 +1015,8 @@ static void vg_scissor(VgSurface *s, uint32_t x0, uint32_t y0, uint32_t x1, uint
     GLint H = (GLint)hw_py(s->h, s->sc);
     if (sw < 0) sw = 0;
     if (sh < 0) sh = 0;
-    glEnable(GL_SCISSOR_TEST);
     /* scissor de GL cuenta desde NDC -1: ahí está el guest y=0 si ysign > 0 */
-    glScissor(sx, s_vg.ysign > 0 ? gy0 : H - gy0 - sh, sw, sh);
+    vg_scissor_gl(1, sx, s_vg.ysign > 0 ? gy0 : H - gy0 - sh, sw, sh);
 }
 
 static void vg_state(VgSurface *s, GLuint depth)
@@ -1085,7 +1145,12 @@ static void ng_draw(const HwVertex *v, uint32_t count)
 {
     VgSurface *s;
     uint32_t i;
+    static unsigned s_cpu_draw_warn;
     if (!count) return;
+    if (++s_cpu_draw_warn <= 5) {
+        fprintf(stderr, "[HW CPU-FALLBACK] draw #%u: count=%u, prim=%u, idx_count=%u\n",
+                s_cpu_draw_warn, count, s_gpu.prim, s_gpu.idx_count);
+    }
     if (!vg_begin_draw(&s, 0)) return;
     for (i = 0; i < 8; i++) {
         glEnableVertexAttribArray(i);
@@ -1259,8 +1324,8 @@ static uint32_t vg_vsp_get(const uint8_t *inputs, uint32_t ninputs)
  * contenido: si la malla cambia (animada en la CPU) la huella cambia y se reconvierte.
  * Tope de memoria: VC_BUDGET; lo que lleva VC_IDLE fotogramas sin usarse se libera. */
 #define VC_SLOTS  2048
-#define VC_BUDGET (12u << 20)
-#define VC_IDLE   300
+#define VC_BUDGET (6u << 20)
+#define VC_IDLE   60
 typedef struct {
     uint32_t key, hash, imin, span, ninputs, bytes, used;
     GLuint vbo;
@@ -1367,7 +1432,16 @@ static void vg_vcache_trim(void)
 }
 #endif
 
+static int ng_draw_program_batch_body(void);
 static int ng_draw_program_batch(void)
+{
+    uint64_t t0 = vg_now_us();
+    int r = ng_draw_program_batch_body();
+    s_prof.batch += vg_now_us() - t0;
+    return r;
+}
+
+static int ng_draw_program_batch_body(void)
 {
     static uint32_t stamp[65536], batch_id;
     static uint16_t remap[65536];
@@ -1378,7 +1452,15 @@ static int ng_draw_program_batch(void)
     uint32_t ninputs, n = s_gpu.idx_count, i, a, nv = 0, ni = 0, vsp;
     VgSurface *s;
     VgProgram *p;
-    if (!s_vg.gpu_vsh || n < 3 || n > VG_MAX_BATCH_VERTS) return 0;
+    if (!s_vg.gpu_vsh) { s_prof.rej_novsh++; return 0; }
+    if (n < 3) return 0;
+    if (n > VG_MAX_BATCH_VERTS) {
+        static unsigned s_maxverts_warn;
+        if (++s_maxverts_warn <= 5)
+            fprintf(stderr, "[HW REJECT] n=%u > VG_MAX_BATCH_VERTS=%u\n", n, VG_MAX_BATCH_VERTS);
+        s_prof.rej_maxverts++;
+        return 0;
+    }
     switch (s_gpu.prim) {
     case NV_PRIM_TRIANGLES: case NV_PRIM_TRIANGLE_STRIP: case NV_PRIM_TRIANGLE_FAN:
     case NV_PRIM_POLYGON: case NV_PRIM_QUADS: case NV_PRIM_QUAD_STRIP:
@@ -1483,11 +1565,12 @@ static void ng_clear(uint32_t param)
     if ((param & 3) && vg_depth(s)) {
         GLbitfield bits = ((param & 1) ? GL_DEPTH_BUFFER_BIT : 0) | ((param & 2) ? GL_STENCIL_BUFFER_BIT : 0);
         vg_bind_surface(s);
-        glDisable(GL_SCISSOR_TEST);
+        vg_scissor_gl(0, 0, 0, 0, 0);
         glDepthMask(GL_TRUE);
         glClearDepthf((float)(hw_zmax_bits() == 65535 ? s_gpu.zstencil_clear & 65535 : s_gpu.zstencil_clear >> 8) / hw_zmax_bits());
         glClearStencil((GLint)(s_gpu.zstencil_clear & 255));
         glClear(bits);
+        if (bits & GL_STENCIL_BUFFER_BIT) s_vg.sc_on = -1;   /* ver vg_scissor_gl */
     }
     if ((param & 0xF0) && x1 > x0 && y1 > y0) {
         float color[4];
@@ -1531,10 +1614,9 @@ static void ng_compose_body(void)
     if (pw > VG_SCREEN_W) { pw = VG_SCREEN_W; ph = VG_SCREEN_W / s_hw.aspect; py = (VG_SCREEN_H - ph) * 0.5f; }
     px = (VG_SCREEN_W - pw) * 0.5f;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glFinish();
     vg_bind_surface(&(VgSurface){0});   /* la caché ya no vale */
     glViewport(0, 0, VG_SCREEN_W, VG_SCREEN_H);
-    glDisable(GL_SCISSOR_TEST); glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
+    vg_scissor_gl(0, 0, 0, 0, 0); glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -1652,12 +1734,13 @@ static void ng_flip(void)
         uint32_t frames = s_hw.frame - last_frame;
         double fr = frames ? (double)frames : 1.0;
         fprintf(stderr, "[HW vita] %.1f fps; %.1f draws/frame; %u shaders; %llu texturas subidas; ms/frame: "
-                "compose %.1f, present %.1f; %.0f+%.0f vért/frame; %llu depth nuevos; %u DXT1; "
-                "VBO %u KB (%u reusos, %u conversiones); a CPU %llu/%llu/%llu (pack/entradas/programa); "
+                "compose %.1f, present %.1f, draws %.1f (texturas %.1f); %.0f+%.0f vért/frame; %llu depth nuevos; %u DXT1; "
+                "VBO %u KB (%u reusos, %u conversiones); a CPU %llu/%llu/%llu/%llu (pack/entradas/prog/maxv); "
                 "vitaGL libre VRAM %u KB, RAM %u KB\n",
                 frames * 1000.0 / (now - last_log), frames ? (double)(s_hw.draws - last_draws) / frames : 0,
                 s_vg.nprograms, (unsigned long long)s_hw.tex_uploads,
-                s_prof.compose / 1000.0 / fr, s_prof.present / 1000.0 / fr, s_prof.verts / fr, s_prof.pverts / fr,
+                s_prof.compose / 1000.0 / fr, s_prof.present / 1000.0 / fr,
+                s_prof.batch / 1000.0 / fr, s_prof.tex / 1000.0 / fr, s_prof.verts / fr, s_prof.pverts / fr,
                 (unsigned long long)s_prof.depths, s_vg.dxt1_uploads,
 #if defined(RESOT_HW_GLSL)
                 0u, 0u, 0u,
@@ -1665,7 +1748,7 @@ static void ng_flip(void)
                 s_vc_bytes >> 10, s_vc_hits, s_vc_builds,
 #endif
                 (unsigned long long)s_prof.rej_pack, (unsigned long long)s_prof.rej_inputs,
-                (unsigned long long)s_prof.rej_vsp,
+                (unsigned long long)s_prof.rej_vsp, (unsigned long long)s_prof.rej_maxverts,
 #if defined(RESOT_HW_GLSL)
                 0u, 0u);
 #else
@@ -1673,6 +1756,9 @@ static void ng_flip(void)
 #endif
         memset(&s_prof, 0, sizeof s_prof);
         last_log = now; last_frame = s_hw.frame; last_draws = s_hw.draws;
+#ifdef __vita__
+        { extern void vita_log_flush(void); vita_log_flush(); }
+#endif
     }
     ng_compose();
     if (!xbox_FramebufferDeferPresent()) ng_present(1);

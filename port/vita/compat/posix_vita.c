@@ -9,9 +9,18 @@
 #include <time.h>
 
 #include <psp2/kernel/sysmem.h>
+#include <pthread.h>
 
 #include "sys/sysinfo.h"
 #include "platform/win32_compat.h"
+
+int pthread_setname_np(pthread_t thread, const char *name)
+{
+    (void)thread;
+    extern void vita_thread_set_name(const char *name);
+    vita_thread_set_name(name);
+    return 0;
+}
 
 int posix_memalign(void **out, size_t align, size_t size)
 {
@@ -80,3 +89,10 @@ void vita_partition_length(HANDLE h, LARGE_INTEGER *size)
     if (n >= 1 && n <= 5 && !strcmp(img + 20, ".img"))
         size->QuadPart = (LONGLONG)sectors[n] * 512;
 }
+
+#ifdef __vita__
+/* rePOP 0.5.0 (win32_compat.c, ruta Android): solo se llama si se leyeron las capacidades
+ * de núcleo de /sys, que la Vita no tiene; negarse deja la elección al planificador. */
+int sched_setaffinity(int pid, size_t size, const void *set)
+{ (void)pid; (void)size; (void)set; errno = ENOSYS; return -1; }
+#endif

@@ -26,6 +26,7 @@
 typedef struct {
     SceUID thid;
     void *entry;               /* rutina de inicio (addr2line sobre el ELF) */
+    char name[32];             /* nombre descriptivo */
     unsigned long long last_us;
 } ThreadSlot;
 
@@ -33,14 +34,78 @@ static ThreadSlot s_threads[MAX_THREADS];
 static volatile int s_count;
 static int s_affinity = -1;
 
+static ThreadSlot *find_or_add_slot(SceUID thid)
+{
+    int i, n = s_count < MAX_THREADS ? s_count : MAX_THREADS;
+    for (i = 0; i < n; i++) {
+        if (s_threads[i].thid == thid) return &s_threads[i];
+    }
+    int slot = __atomic_fetch_add(&s_count, 1, __ATOMIC_RELAXED);
+    if (slot >= MAX_THREADS) return NULL;
+    s_threads[slot].thid = thid;
+    return &s_threads[slot];
+}
+
+void vita_thread_set_name(const char *name)
+{
+    SceUID me = sceKernelGetThreadId();
+    ThreadSlot *s = find_or_add_slot(me);
+    if (s && name && name[0]) {
+        strncpy(s->name, name, sizeof(s->name) - 1);
+        s->name[sizeof(s->name) - 1] = 0;
+    }
+}
+
+void vita_thread_set_affinity(const char *name, int mask)
+{
+    SceUID me = sceKernelGetThreadId();
+    ThreadSlot *s = find_or_add_slot(me);
+    if (s && name && name[0]) {
+        strncpy(s->name, name, sizeof(s->name) - 1);
+        s->name[sizeof(s->name) - 1] = 0;
+    }
+    if (s_affinity < 0) {
+        const char *env = getenv("RECOMP_VITA_AFFINITY");
+        if (env && (!strcmp(env, "0") || !strcmp(env, "all") || !strcmp(env, "none"))) {
+            s_affinity = 0;
+        } else {
+            s_affinity = 1;
+        }
+    }
+    if (s_affinity && mask != 0) {
+        sceKernelChangeThreadCpuAffinityMask(me, mask);
+        fprintf(stderr, "[THR-AFFINITY] '%s' (thid 0x%X) asignado a nucleo 0x%X\n",
+                s && s->name[0] ? s->name : "?", (unsigned)me, (unsigned)mask);
+    } else if (!s_affinity) {
+        sceKernelChangeThreadCpuAffinityMask(me, SCE_KERNEL_CPU_MASK_USER_ALL);
+    }
+}
+
 void vita_thread_register(void *entry)
 {
-    int i = __atomic_fetch_add(&s_count, 1, __ATOMIC_RELAXED);
-    if (i >= MAX_THREADS) return;
-    s_threads[i].entry = entry;
-    s_threads[i].thid = sceKernelGetThreadId();
-    if (s_affinity < 0) s_affinity = !(getenv("RECOMP_VITA_AFFINITY") && !strcmp(getenv("RECOMP_VITA_AFFINITY"), "0"));
-    if (s_affinity) sceKernelChangeThreadCpuAffinityMask(s_threads[i].thid, SCE_KERNEL_CPU_MASK_USER_ALL);
+    SceUID me = sceKernelGetThreadId();
+    ThreadSlot *s = find_or_add_slot(me);
+    if (s) {
+        s->entry = entry;
+    }
+    if (s_affinity < 0) {
+        const char *env = getenv("RECOMP_VITA_AFFINITY");
+        if (env && (!strcmp(env, "0") || !strcmp(env, "all") || !strcmp(env, "none"))) {
+            s_affinity = 0;
+        } else {
+            s_affinity = 1;
+        }
+    }
+    /* Si la afinidad personalizada está activa y este hilo aún no tiene máscara específica,
+     * asignamos Core 0 y Core 2 (0x50000), reservando Core 1 exclusivamente para el ejecutor GPU. */
+    if (s_affinity) {
+        int current_mask = sceKernelGetThreadCpuAffinityMask(me);
+        if (current_mask <= 0 || current_mask == SCE_KERNEL_CPU_MASK_USER_ALL) {
+            sceKernelChangeThreadCpuAffinityMask(me, SCE_KERNEL_CPU_MASK_USER_0 | SCE_KERNEL_CPU_MASK_USER_2);
+        }
+    } else {
+        sceKernelChangeThreadCpuAffinityMask(me, SCE_KERNEL_CPU_MASK_USER_ALL);
+    }
 }
 
 typedef struct { void *(*fn)(void *); void *arg; } PtBox;
@@ -110,8 +175,9 @@ void vita_threads_log(unsigned interval_ms)
         info.size = sizeof info;
         if (sceKernelGetThreadInfo(s_threads[i].thid, &info) < 0) continue;   /* terminó */
         us = info.runClocks;   /* µs */
-        fprintf(stderr, "[THR] %-24.24s entry=%p prio=%d cpu=%d mask=0x%X status=0x%X cpu%%=%u\n",
-                info.name, s_threads[i].entry, info.currentPriority, info.currentCpuId,
+        const char *display_name = s_threads[i].name[0] ? s_threads[i].name : info.name;
+        fprintf(stderr, "[THR] %-20.20s entry=%p prio=%d cpu=%d mask=0x%X status=0x%X cpu%%=%u\n",
+                display_name, s_threads[i].entry, info.currentPriority, info.currentCpuId,
                 (unsigned)info.currentCpuAffinityMask, (unsigned)info.status,
                 (unsigned)((us - s_threads[i].last_us) / (interval_ms * 10ull)));
         s_threads[i].last_us = us;

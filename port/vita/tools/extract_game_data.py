@@ -3,7 +3,7 @@
 el port de PS Vita lee (como scripts/extract-game-data.py de nfsmw-vita).
 
 Uso:
-    python3 -I extract_game_data.py DISCO DESTINO [--all-languages]
+    python3 -I extract_game_data.py DISCO DESTINO [--all-languages | --lang=N]
 
 DISCO es la XISO NTSC extraída (default.xbe con el SHA-256 de rePOP).
 DESTINO es una carpeta local (copiarla entera a ux0:data/pop-sot/) o
@@ -19,6 +19,8 @@ Fuera (2,4 GB -> ~1,6 GB):
     pop_out0 en los logs (2026-10-21). CINE_9010 en lugar de 9011/9012 es
     hipótesis por analogía (aún no se llegó a esas cinemáticas):
     --all-languages lo copia todo si falta alguna.
+  - --lang=N: solo la variante N (0 inglés, 1 francés, 2 español; el índice
+    que XGetLanguage del juego da a XC_LANGUAGE 1/4/5, ver compat/lang_vita.c).
 
 Solo lee el disco; no ejecuta nada de él.
 """
@@ -31,16 +33,17 @@ from pathlib import Path
 XBE_SHA256 = "753C58B191279BF4D1A8B28A936DF36AA222ED566487AB1FBDFCD090E91EE379"
 SKIP_DIRS = {"POP1", "POP2"}
 SKIP_FILES = {"UPDATE.XBE", "DASHUPDATE.XBE"}
-LANG_VARIANT = re.compile(r"^(CINE_90\d|POPLOGO|POP_IN|POP_OUT|SOUNDX)([1-9])\.(INT|BIG|FAT)$", re.I)
+LANG_VARIANT = re.compile(r"^(CINE_90\d|POPLOGO|POP_IN|POP_OUT|SOUNDX)(\d)\.(INT|BIG|FAT)$", re.I)
 
 
-def wanted(rel, all_languages=False):
+def wanted(rel, all_languages=False, lang=0):
     parts = rel.split("/")
     if parts[-1].startswith("._") or parts[0].upper() in SKIP_DIRS:
         return False
     if len(parts) == 1 and parts[0].upper() in SKIP_FILES:
         return False
-    return all_languages or not LANG_VARIANT.match(parts[-1])
+    m = LANG_VARIANT.match(parts[-1])
+    return all_languages or not m or int(m.group(2)) == lang
 
 
 def self_check():
@@ -50,12 +53,14 @@ def self_check():
     assert wanted("VIDEO/Loading3.int") and wanted("VIDEO/VIS_111.int")   # no son idiomas
     assert not wanted("POP2/default.xbe") and not wanted("update.xbe") and not wanted("VIDEO/._x.int")
     assert wanted("VIDEO/CINE_9012.INT", all_languages=True)
+    assert wanted("VIDEO/CINE_9012.INT", lang=2) and not wanted("VIDEO/CINE_9010.INT", lang=2)
+    assert wanted("SOUND/soundx2.fat", lang=2) and wanted("SOUND/SOUNDX.big", lang=2)
 
 
-def files(disc, all_languages):
+def files(disc, all_languages, lang):
     for p in sorted(disc.rglob("*")):
         rel = p.relative_to(disc).as_posix()
-        if p.is_file() and wanted(rel, all_languages):
+        if p.is_file() and wanted(rel, all_languages, lang):
             yield rel, p
 
 
@@ -124,6 +129,7 @@ def main():
         sys.exit(__doc__)
     disc, dest_arg = Path(args[0]), args[1]
     all_languages = "--all-languages" in sys.argv
+    lang = next((int(a[7:]) for a in sys.argv if a.startswith("--lang=")), 0)
     xbe = disc / "default.xbe"
     if not xbe.is_file():
         sys.exit("No hay default.xbe en %s" % disc)
@@ -131,7 +137,7 @@ def main():
     if digest != XBE_SHA256:
         sys.exit("default.xbe no es el NTSC que usa el port (SHA-256 %s, se espera %s)" % (digest, XBE_SHA256))
     dest = FtpDest(dest_arg) if dest_arg.startswith("ftp://") else LocalDest(dest_arg)
-    todo = list(files(disc, all_languages))
+    todo = list(files(disc, all_languages, lang))
     total = sum(p.stat().st_size for _, p in todo)
     done = 0
     print("%d archivos, %.0f MB" % (len(todo), total / 2**20), flush=True)
