@@ -37,6 +37,10 @@ int32_t vvm_pt[VVM_PAGES];
 uint32_t vvm_gen_base, vvm_gen_lim;
 extern ptrdiff_t g_xbox_mem_offset;
 uint32_t vvm_ram_lo, vvm_ram_size;
+uintptr_t __attribute__((noinline)) vvm_gen_ptr_slow(uint32_t va)
+{
+    return (uintptr_t)vvm_ptr(va + (uint32_t)g_xbox_mem_offset);
+}
 
 static uint8_t  *s_block;            /* B */
 static uint32_t  s_h;                /* H: host de guest 0 */

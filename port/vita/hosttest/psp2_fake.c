@@ -30,6 +30,8 @@
 #include <ucontext.h>
 #include <unistd.h>
 
+#include <stddef.h>
+#include "../compat/vvm.h"
 #include "window_sdl.h"
 
 static uint64_t now_ms(void)
@@ -284,6 +286,10 @@ static void *prof_sampler(void *arg)
     struct timespec ts = { 0, (e ? atol(e) : 1000) * 1000L };
     unsigned long ticks = 0, per_dump = 10000000000UL / (unsigned long)ts.tv_nsec;
     (void)arg;
+    /* HOSTTEST_PROF_DELAY_S: empezar tras los vídeos (en el hosttest corre el Bink del juego;
+     * en la Vita lo sustituye FFmpeg, así que no debe contar). */
+    if ((e = getenv("HOSTTEST_PROF_DELAY_S")) != NULL) sleep((unsigned)atoi(e));
+    fprintf(stderr, "[PROF] muestreo en marcha\n");
     for (;;) {
         nanosleep(&ts, NULL);
         pthread_kill(s_prof_game, SIGPROF);
@@ -291,17 +297,48 @@ static void *prof_sampler(void *arg)
     }
     return NULL;
 }
+/* ── volcado de bloqueo (HOSTTEST_STALL_S=N) ──
+ * Cada N segundos game_main imprime su pc/lr ARM, los registros x86 y las direcciones de
+ * código del XBE que hay en su pila guest (posibles retornos: quién llamó a la espera).
+ * Se traducen a sub_XXXXXXXX con la lista de upstream gen/recomp_funcs.h. Para bloqueos sin crash (log_042). */
+static void stall_signal(int sig, siginfo_t *si, void *ctx)
+{
+    ucontext_t *uc = ctx;
+    (void)sig; (void)si;
+    fprintf(stderr, "[STALL] pc %08lx lr %08lx eax %08x ecx %08x edx %08x ebx %08x esi %08x edi %08x esp %08x\n",
+            uc->uc_mcontext.arm_pc, uc->uc_mcontext.arm_lr, g_eax, g_ecx, g_edx, g_ebx, g_esi, g_edi, g_esp);
+    fprintf(stderr, "[STALL] pila guest:");
+    for (uint32_t i = 0, n = 0; i < 1024 && n < 24; i++) {
+        uint32_t v = *(const uint32_t *)vvm_gen_ptr(g_esp + i * 4);
+        if (v >= 0x00011000u && v < 0x00420000u) { fprintf(stderr, " +%03x:%08x", i * 4, v); n++; }
+    }
+    fputc('\n', stderr);
+}
+static void *stall_watch(void *arg)
+{
+    unsigned every = (unsigned)atoi(getenv("HOSTTEST_STALL_S"));
+    (void)arg;
+    for (;;) { sleep(every ? every : 30); pthread_kill(s_prof_game, SIGUSR2); }
+    return NULL;
+}
 /* main_vita.c: lo llama el hilo game_main al empezar. */
 void hosttest_prof_register(void)
 {
     struct sigaction sa;
     pthread_t t;
+    s_prof_game = pthread_self();
+    if (getenv("HOSTTEST_STALL_S")) {
+        memset(&sa, 0, sizeof sa);
+        sa.sa_sigaction = stall_signal;
+        sa.sa_flags = SA_SIGINFO | SA_RESTART;
+        sigaction(SIGUSR2, &sa, NULL);
+        pthread_create(&t, NULL, stall_watch, NULL);
+    }
     if (!getenv("HOSTTEST_PROF")) return;
     memset(&sa, 0, sizeof sa);
     sa.sa_sigaction = prof_signal;
     sa.sa_flags = SA_SIGINFO | SA_RESTART;
     sigaction(SIGPROF, &sa, NULL);
-    s_prof_game = pthread_self();
     mkdir(DATA_DIR "/logs", 0777);
     if (pthread_create(&t, NULL, prof_sampler, NULL) == 0)
         fprintf(stderr, "[PROF] muestreando game_main -> %s\n", DATA_DIR "/logs/prof_game_main.txt");

@@ -79,10 +79,12 @@ def report(anchor, samples, syms, modules, top=60):
         if game(caller):
             caller = base(caller)
             incl[caller] = incl.get(caller, 0) + n
-    pct = lambda n: f"{100.0 * n / total:5.2f}"
+    active = total - outside or 1
+    pct = lambda n: f"{100.0 * n / active:5.2f}"
     out = [f"# Perfil de game_main (hosttest)\n",
-           f"Muestras: {total} · código del juego (`sub_*`): {pct(sum(self_t.values()))} % · "
-           f"ayudantes del runtime: {pct(sum(helpers.values()))} % · fuera del binario (libc/esperas): {pct(outside)} %\n",
+           f"Muestras: {total}; fuera del binario (libc/esperas): {100.0 * outside / total:.2f} % del total.\n",
+           f"**Los % de abajo son sobre el tiempo activo** ({active} muestras dentro del binario): "
+           f"código del juego (`sub_*`) {pct(sum(self_t.values()))} % · ayudantes del runtime {pct(sum(helpers.values()))} %\n",
            "## Funciones del juego, por tiempo con ayudantes\n",
            "| # | Función | % con ayudantes | % propio | Módulo |", "|---:|---|---:|---:|---|"]
     acc = 0
@@ -105,10 +107,10 @@ def self_check():
                                  "00401010 00000000 4", "00401110 00000000 2",
                                  "00401184 00401051 3", "b6f00000 00401011 1"])
     text = report(anchor, samples, syms, {"sub_00011000": "engine"})
-    assert "| 1 | `sub_00011000` | 70.00 | 40.00 | engine |" in text, text
-    assert "| 2 | `sub_00022000` | 20.00 | 20.00 | ? |" in text, text
-    assert "fuera del binario (libc/esperas): 10.00 %" in text, text
-    assert "| `vvm_ptr` | 30.00 |" in text, text
+    assert "| 1 | `sub_00011000` | 77.78 | 44.44 | engine |" in text, text
+    assert "| 2 | `sub_00022000` | 22.22 | 22.22 | ? |" in text, text
+    assert "fuera del binario (libc/esperas): 10.00 % del total" in text, text
+    assert "| `vvm_ptr` | 33.33 |" in text, text
     print("self-check OK")
 
 

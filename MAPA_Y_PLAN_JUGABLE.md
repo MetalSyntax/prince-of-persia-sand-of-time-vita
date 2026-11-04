@@ -80,6 +80,10 @@ los primeros 2 minutos de partida). ⛔ = si falla, se para y se decide.
 - [x] (2026-11-04) Prueba en consola: log_041 (idioma inglés → error de disco, corregido), log_042 (renderer
       directo bloquea tras el primer flip, reproducido en hosttest), **log_043: base recuperada, menú 5,6–6,3 fps**
       con `RESOT_DIRECT_DRAW=0` por defecto.
+- [x] (2026-11-04) C9 en consola: A (`vvm_gen_ptr` en línea, log_044) y B (+ división 64→32 y FIST,
+      log_045) **no mejoran** el fps a igual nº de draws. `game_main` espera ~25–28% del tiempo a KickOffs
+      del ejecutor y el fps sigue a los draws/frame: el ejecutor GPU (P1) va antes que la CPU del juego.
+      El perfil del hosttest (qemu, Mesa) no predice la consola: perfilar en la Vita antes de más C9.
 - [ ] Renderer directo: depurar el bloqueo en hosttest (se reproduce) y reactivarlo (va a P1).
 - [ ] Probar en consola el eboot con v0.5.0. Buscar `[DIRECT] mode 1` y las líneas `[DIRECT]`/`[DRAWS]`;
       comparar `[KICK] executing` con log_040 (4,4 s / 10 s).
@@ -165,7 +169,17 @@ Para la Vita, nuestras sustituciones irían en `port/vita/` (el submódulo no se
 - [ ] D1 Perfilador por función del hilo del juego → lista de las funciones calientes.
       Hecho el instrumento (2026-11-04): `HOSTTEST_PROF=1 port/vita/hosttest/run.sh run 900` y luego
       `port/vita/hosttest/run.sh prof` → `build/hosttest-data/logs/prof_report.md`
-      (`hosttest/prof_report.py --self-check` OK). Falta la primera corrida.
+      (`hosttest/prof_report.py --self-check` OK).
+      **Primer perfil del menú (2026-11-04, hosttest):** el vídeo `attract.int` (Bink del juego; en la Vita
+      lo decodifica FFmpeg) se lleva el 80% y hay que excluirlo. Sin él (≈10 000 muestras activas):
+      - código del juego **plano**: la más pesada `sub_000CF790` (engine) 4,9%; las 30 primeras 33%.
+        Decompilar funciones sueltas rinde poco por ahora → prioridad a C9 (coste de traducción global).
+      - ayudantes del runtime 42%: `__udivmoddi4` 6,6% (div x86 como int64), `__fixdfdi` 5,6%
+        (`recomp_fist` siempre a int64), `vvm_gen_ptr` fuera de línea, `recomp_lookup` 3,1%.
+- [x] (2026-11-04) Arreglos por el perfil: `vvm_gen_ptr` always_inline (481 214 llamadas → 0 en el
+      camino rápido; C4 nunca había funcionado), división 64→32 bits (`compat/divmod_vita.c`,
+      `run.sh divmod` OK contra libgcc), `recomp_fist` a int32 por VFP (vitaize). Pendiente de consola.
+- [ ] Mejorar el perfil: excluir el vídeo de serie (o medir dentro de una partida, sin attract).
 - [ ] D2 Primera función sustituida y validada por diferencias (elegir una hoja matemática).
 - [ ] D3 Las 10 más calientes → medir. ⛔ Si no bajan `game_main` de forma visible, parar y revisar.
 - No usar el código filtrado de Jade (decisión del usuario requerida, ver `CLAUDE.md`).

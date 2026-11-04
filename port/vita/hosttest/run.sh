@@ -7,6 +7,7 @@
 #   port/vita/hosttest/run.sh build          compila (contenedor arm64 + cross gcc, ~15 min)
 #   port/vita/hosttest/run.sh run [segundos] arranca el juego (por defecto 600 s)
 #   port/vita/hosttest/run.sh prof [top]     informe del perfil (tras run con HOSTTEST_PROF=1)
+#   port/vita/hosttest/run.sh divmod         prueba de compat/divmod_vita.c contra libgcc
 #
 # Logs, capturas (logs/frames/*.ppm) y saves: build/hosttest-data/.
 # Variables útiles en run: HOSTTEST_PAD, HOSTTEST_FRAME_MS, HOSTTEST_PROF=1 (perfil de game_main) (ver psp2_fake.c), RECOMP_*,
@@ -49,12 +50,19 @@ run)
   if [ -n "${HOSTTEST_WINDOW:-}" ]; then WINDOW="-e DISPLAY=host.docker.internal:0"; fi
   docker run --rm --platform linux/arm/v7 \
     -v "$VOLUME":/build:ro -v "$GAME":/game:ro -v "$DATA":/data \
-    -e HOSTTEST_PAD -e HOSTTEST_FRAME_MS -e HOSTTEST_PROF -e HOSTTEST_PROF_US -e RESOT_DIRECT_DRAW -e RECOMP_APU_TRACE -e RECOMP_TRAP_NULL -e RECOMP_HW \
+    -e HOSTTEST_PAD -e HOSTTEST_FRAME_MS -e HOSTTEST_PROF -e HOSTTEST_PROF_US -e HOSTTEST_PROF_DELAY_S -e HOSTTEST_STALL_S -e RESOT_DIRECT_DRAW -e RECOMP_APU_TRACE -e RECOMP_TRAP_NULL -e RECOMP_HW \
     -e RECOMP_VITA_RT_FLIP -e EGL_PLATFORM=surfaceless -e LIBGL_ALWAYS_SOFTWARE=1 $WINDOW \
     "$RUNIMAGE" sh -c '
       for f in /game/*; do ln -sfn "$f" /data/; done
       cd /data && timeout '"${2:-600}"' /build/out/pop-sot; echo "salida: $?"'
   echo "logs: $DATA/logs"
+  ;;
+divmod)
+  # compat/divmod_vita.c contra libgcc, con el mismo ABI ARM (hosttest/divmod_test.c)
+  docker run --rm -v "$PORT":/port:ro -v "$VOLUME":/build "$IMAGE" sh -ec '
+    arm-linux-gnueabihf-gcc -O2 -mthumb -o /build/divmod_test /port/port/vita/hosttest/divmod_test.c \
+      /port/port/vita/compat/divmod_vita.c -Wl,--wrap=__aeabi_ldivmod,--wrap=__aeabi_uldivmod'
+  docker run --rm --platform linux/arm/v7 -v "$VOLUME":/build:ro "$RUNIMAGE" /build/divmod_test
   ;;
 prof)
   # Símbolos del mismo binario que corrió; el informe se genera en el host.
@@ -65,5 +73,5 @@ prof)
     | tee "$DATA/logs/prof_report.md"
   ;;
 *)
-  sed -n 2,13p "$0"; exit 2 ;;
+  sed -n 2,14p "$0"; exit 2 ;;
 esac

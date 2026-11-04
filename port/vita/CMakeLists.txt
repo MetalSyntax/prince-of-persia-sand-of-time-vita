@@ -162,6 +162,11 @@ target_compile_options(${PROJECT_NAME} PRIVATE
 # runtime la encuentra antes por ${VZ} en la ruta de includes.
 set_property(SOURCE ${GEN_SOURCES} APPEND PROPERTY COMPILE_DEFINITIONS RECOMP_GENERATED_CODE)
 set_property(SOURCE ${GEN_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -include "${VZ}/recomp_types.h")
+# Módulos XDK fríos (red, Xbox Live, periféricos, WMA): -O1 compila más rápido y no salen
+# en el perfil (hosttest, 2026-11-04). Va tras -O2 en la línea de órdenes, así que gana.
+set(COLD_GEN_SOURCES ${GEN_SOURCES})
+list(FILTER COLD_GEN_SOURCES INCLUDE REGEX "/gen/xdk/(xnet|xonline|xpp|wmadec)/")
+set_property(SOURCE ${COLD_GEN_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -O1)
 if(HOSTTEST)
   # Solo los headers psp2 de VitaSDK (no su newlib): copiados por hosttest/run.sh.
   target_sources(${PROJECT_NAME} PRIVATE hosttest/psp2_fake.c hosttest/window_sdl.c)
@@ -202,12 +207,13 @@ if(NOT EXISTS "${FFMPEG_BINK}/lib/libavcodec.a")
 endif()
 set_property(SOURCE src/movie_vita.c APPEND PROPERTY INCLUDE_DIRECTORIES "${FFMPEG_BINK}/include")
 target_link_libraries(${PROJECT_NAME} "${FFMPEG_BINK}/lib/libavformat.a" "${FFMPEG_BINK}/lib/libavcodec.a" "${FFMPEG_BINK}/lib/libavutil.a" z)
-target_sources(${PROJECT_NAME} PRIVATE compat/threads_vita.c compat/log_vita.c compat/lang_vita.c src/movie_vita.c)   # solo Vita: [THR], afinidad, log x32, vídeos Bink por FFmpeg
+target_sources(${PROJECT_NAME} PRIVATE compat/threads_vita.c compat/log_vita.c compat/lang_vita.c compat/divmod_vita.c src/movie_vita.c)   # solo Vita: [THR], afinidad, log x32, vídeos Bink por FFmpeg
 target_link_libraries(${PROJECT_NAME}
   -Wl,--whole-archive pthread -Wl,--no-whole-archive
   -Wl,--pic-veneer -Wl,--wrap=recomp_lookup -Wl,--wrap=pthread_create -Wl,--wrap=CreateThread
   -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=memalign
   -Wl,--wrap=__emutls_get_address -Wl,--wrap=resot_game_language
+  -Wl,--wrap=__aeabi_ldivmod,--wrap=__aeabi_uldivmod   # compat/divmod_vita.c
   SceDisplay_stub SceSysmem_stub ScePower_stub
   vitaGL_lib vitashark SceShaccCgExt taihen_stub SceShaccCg_stub mathneon
   SceKernelThreadMgr_stub SceIofilemgr_stub SceRtc_stub SceAppUtil_stub SceTouch_stub SceAudio_stub SceAppMgr_stub SceCtrl_stub

@@ -390,6 +390,16 @@ def patch_recomp_types(src, dst):
                         "typedef float vz_a1_float __attribute__((aligned(1)));\n"
                         "typedef double vz_a1_double __attribute__((aligned(1)));\n"
                         "#define XBOX_PTR(addr)", 1)
+    # recomp_fist (FIST/FISTP): (int64_t)double es __fixdfdi en software aunque el destino sea
+    # de 16/32 bits (59 de 67 usos), y ldexp en cada llamada. En rango y ya redondeado, la
+    # conversión a int32 por VFP da el mismo valor (perfil del menú 2026-11-04: __fixdfdi 5,6%).
+    for old, new in (("    double limit=ldexp(1.0,(int)bits-1);",
+                      "    double limit=bits==32?2147483648.0:bits==16?32768.0:ldexp(1.0,(int)bits-1);"),
+                     ("    return (int64_t)rounded;\n}",
+                      "    if (bits <= 32) return (int32_t)rounded;\n    return (int64_t)rounded;\n}")):
+        if text.count(old) != 1:
+            sys.exit("vitaize: ancla de recomp_fist no encontrada en %s" % src)
+        text = text.replace(old, new)
     write_if_changed(dst, text)
 
 

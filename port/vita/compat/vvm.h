@@ -50,10 +50,15 @@ static inline uint32_t vvm_fixed(const uint32_t *p)
 #endif
 }
 extern ptrdiff_t g_xbox_mem_offset;
-static inline uintptr_t vvm_gen_ptr(uint32_t va)
+/* Camino lento fuera de línea (vvm.c): como antes, también antes del atajo. */
+uintptr_t vvm_gen_ptr_slow(uint32_t va);
+/* always_inline: con -O2 GCC no la integraba en las funciones generadas grandes (límite de
+ * crecimiento): 481 214 llamadas a 67 copias fuera de línea en el ELF (2026-11-04), así que C4
+ * paso 1 no rendía (log_040). Solo el camino rápido entra en línea. */
+static inline __attribute__((always_inline)) uintptr_t vvm_gen_ptr(uint32_t va)
 {
     if (__builtin_expect(va < vvm_fixed(&vvm_gen_lim), 1)) return (uintptr_t)(va + vvm_fixed(&vvm_gen_base));
-    return (uintptr_t)vvm_ptr(va + (uint32_t)g_xbox_mem_offset);   /* como antes (también antes del atajo) */
+    return vvm_gen_ptr_slow(va);
 }
 
 /* Tras xbox_MemoryLayoutInit: 1 si el atajo quedó activo. */
